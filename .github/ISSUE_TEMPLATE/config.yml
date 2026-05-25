@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report (private)
+    url: mailto:juangonzalez@creai.mx
+    about: Report security concerns privately — see SECURITY.md.
+  - name: Questions and discussion
+    url: https://github.com/juangonzalez-creai/dev-assistant/discussions
+    about: For open-ended questions, prefer Discussions over Issues.

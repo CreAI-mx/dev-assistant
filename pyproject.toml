@@ -1,0 +1,71 @@
+[project]
+name = "dev-assistant"
+version = "0.1.0"
+description = "AI-powered developer assistant CLI that standardizes work across gather → plan → execute → feedback → evaluate phases."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Juan Gonzalez", email = "juangonzalez@creai.mx" },
+]
+keywords = ["claude-code", "developer-tools", "cli", "ai-assistant", "workflow"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: Other/Proprietary License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "build>=1.2",
+]
+
+[project.scripts]
+dev-assistant = "dev_assistant.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/juangonzalez-creai/dev-assistant"
+Issues = "https://github.com/juangonzalez-creai/dev-assistant/issues"
+Changelog = "https://github.com/juangonzalez-creai/dev-assistant/blob/develop/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dev_assistant"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line-too-long (handled by formatter)
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

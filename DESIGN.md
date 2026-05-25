@@ -1,0 +1,244 @@
+# Dev Assistant — Design
+
+## Vision
+
+A developer assistant integrated with Claude Code. Standardizes how I work through development tasks across the five stages of any meaningful piece of work: gather information, plan, execute, get feedback during execution, and evaluate.
+
+## Architecture (slash-commands-first)
+
+The primary interface is **Claude Code slash commands**. They drive the workflow — each phase is one slash command. Underneath them sits a small Python CLI that provides the deterministic operations the slash commands need (scaffolding folders, reading and writing state, validating structure).
+
+Three layers, top to bottom:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Slash commands   — markdown in .claude/commands/dev-*.md      │
+│ "What should Claude do this phase?"                           │
+│ Drives Claude through the phase; calls helpers via !shell     │
+└──────────────────────────────┬────────────────────────────────┘
+                               │ !dev-assistant <subcommand>
+                               ▼
+┌───────────────────────────────────────────────────────────────┐
+│ Python CLI       — dev-assistant <subcommand>                 │
+│ Deterministic helpers: scaffold, read/write state, validate   │
+└──────────────────────────────┬────────────────────────────────┘
+                               │ filesystem
+                               ▼
+┌───────────────────────────────────────────────────────────────┐
+│ Per-repo state   — .dev-assistant/issues/<id>/...             │
+│ The data: issue.md, gathering/info.md, plan/..., evaluation/  │
+└───────────────────────────────────────────────────────────────┘
+```
+
+Phases (gather / plan / execute / feedback / evaluate) are *reasoning* work — they live in slash commands. The CLI does *not* have one subcommand per phase. It has one subcommand per deterministic operation.
+
+## Status
+
+Experimental. Single-user. Local-only. No distribution planned yet.
+
+## The Five Stages
+
+1. **Gather information** — pull context from meetings, repo state, Slack, conversations into one structured document.
+2. **Plan** — produce a main issue with subtasks (linear, parallel, or delegated).
+3. **Execute** — work through subtasks, following the repo's coding standards. Creates the GitHub issue at this point (distinct from the workspace-issue that exists locally).
+4. **Feedback during execution** — share updates, get PR feedback, iterate.
+5. **Evaluate** — retro, distill lessons, close out.
+
+"Checking" is transversal — present at every stage, not its own stage.
+
+## Three Zones of Storage
+
+### Zone 1 — Program (global)
+
+The CLI code, slash command definitions, agent prompts. Lives in the dev-assistant project repo. Slash commands are installed into Claude Code's command paths (see "Where do slash commands live?" below).
+
+### Zone 2 — Active workspace (per-target-repo)
+
+A hidden `.dev-assistant/` folder created inside each target repo by `dev-assistant init`. Contains all in-flight issue workspaces. Disposable per issue once closed. **Never tracked in the target repo's git** — the CLI adds `.dev-assistant/` to the target repo's `.git/info/exclude` automatically on init.
+
+### Zone 3 — Archive / lessons (split)
+
+- **General lessons** — stay global with the program.
+- **Repo-specific lessons** — live in `.dev-assistant/lessons/` of the target repo.
+
+When a pattern recurs across multiple repos, it can be promoted from repo-specific to global. The promotion mechanism itself is deferred.
+
+## Per-Repo Folder Layout
+
+After `dev-assistant init` in a target repo:
+
+```
+.dev-assistant/
+├── issues/             # workspaces — one folder per active work item
+├── archive/issues/     # archived issue workspaces (kept after /dev-evaluate); created on demand
+├── strategies/         # empty by default; holds per-repo strategy overrides
+└── lessons/            # repo-specific lessons archive (zone-3 slice)
+```
+
+`strategies/` is empty on init. Strategy files are resolved at runtime via `dev-assistant strategies show <name>`, which checks the per-repo `strategies/` first, then falls back to the source default in `<dev-assistant>/templates/`. This means updates to the source defaults reach every repo automatically.
+
+Available templates (each becomes a strategy):
+
+- **`process-objectives.md`** — standard per-issue process expectations (loaded by `/dev-gather`).
+- **`output-style.md`** — how dev-assistant writes artifacts: frontmatter, headings, voice, quoting vs paraphrasing, length per section, what to avoid. Consumed by every slash command that writes a file.
+- **`branching-strategy.md`** — branch structure, conventional commits, rules, step-by-step workflow, sprint variant. Consumed by `/dev-execute` when creating branches and crafting commit messages.
+- **`pr-template.md`** — PR title format, body structure, description style. Consumed by `/dev-execute` at wrap-up when opening PRs.
+- **`comment-style.md`** — style for comments on GitHub / Jira. Consumed when a slash command posts a comment externally.
+- **`gh-issue-template.md`** — default GitHub issue body for the issue that mirrors a Jira ticket. Consumed at `/dev-execute` sub-phase 1a when the user opts in to GH issue creation.
+- **`jira-subtask-template.md`** — default Jira subtask description format. Consumed at `/dev-execute` sub-phase 1a per dev-assistant subtask when the user opts in.
+- **`team-update-template.md`** — default Spanish team announcement message format. Consumed at `/dev-execute` sub-phase 4 to draft the message the user copies into team chat.
+
+To opt in to customizing a strategy for one repo, run `dev-assistant strategies customize <name>` — it copies the source default into `.dev-assistant/strategies/<name>.md`. From then on, that repo uses the local file. Delete the file to revert to the source default.
+
+## Repo context (repo-owned rules dev-assistant must respect)
+
+Strategies are *dev-assistant's* own operational rules. **Repo context** is a separate concept: pointers to *the target repo's* own guideline documents that every phase must consult. Examples: a `data/README.md` describing DVC workflow and MANIFEST/CHANGELOG formats, a `CONTRIBUTING.md` with team conventions, a `docs/STYLE.md` with coding patterns.
+
+The pointer file lives at `.dev-assistant/repo-context.md`. Each H2 header is either a repo-relative file path (the file is inlined when read, so the source of truth stays in the repo and dev-assistant always sees the latest version) or a freeform section title (shown as-is, useful for short rules that don't merit their own file). The prelude before the first H2 is freeform notes.
+
+Resolution is via `dev-assistant repo-context show`, called by every slash command alongside `dev-assistant strategies show <name>`. If a strategy and a repo-context rule conflict, the repo-context rule wins — the repo's own rules are authoritative.
+
+Configuration:
+
+- At init: `dev-assistant init --with-context <path>...` seeds the pointer file with one or more existing rules documents.
+- Later: `dev-assistant repo-context add <path> [--note "..."]`, `dev-assistant repo-context remove <path>`, `dev-assistant repo-context list`.
+
+Repo context is consumed by all five phase slash commands (`/dev-gather`, `/dev-plan`, `/dev-execute`, `/dev-feedback`, `/dev-evaluate`).
+
+After `dev-assistant issue create --id PROJ-123 --title "..."`:
+
+```
+.dev-assistant/issues/PROJ-123/
+├── issue.md            # frontmatter metadata + description
+├── gathering/          # gather phase output (objectives.md)
+├── plan/               # plan phase output
+├── execution/          # execution notes / decisions
+└── evaluation/         # retro / lessons-to-promote
+```
+
+## Where Do Slash Commands Live?
+
+Claude Code looks for slash commands in two places:
+
+- **Project-local**: `<repo>/.claude/commands/` — available only when Claude Code is opened in that repo.
+- **Global**: `~/.claude/commands/` — available everywhere.
+
+**During development the slash commands live project-local**, inside the dev-assistant repo itself at `/home/juan/documents/creai/research/dev_assistant/.claude/commands/`. This avoids polluting global Claude config while the design is in flux.
+
+To use them in any *other* repo, run `dev-assistant commands install` inside that target repo. It creates `<target>/.claude/commands` as a symlink pointing back at the dev-assistant project's source `.claude/commands/`. After restarting Claude Code in the target repo, the `/dev-*` commands are available there too. Edits to the slash command markdown in the dev-assistant repo apply live in every linked target — one source of truth.
+
+The dev-assistant repo itself doesn't need `commands install` — its own `.claude/commands/` is already in place, so opening Claude Code in the dev-assistant repo gives you the commands directly (good for dogfooding).
+
+Once the tool is mature, slash commands can be promoted to global by copying or symlinking them into `~/.claude/commands/` — at that point `commands install` becomes redundant.
+
+## CLI Surface
+
+The CLI is the deterministic substrate. It does not implement phases (those are slash commands). It implements operations the slash commands invoke.
+
+### Implemented
+
+- `dev-assistant init [--with-context <path>]...` — scaffold `.dev-assistant/` in cwd; add it to target repo's `.git/info/exclude`. The optional repeatable `--with-context` flag seeds `.dev-assistant/repo-context.md` with pointers to existing rules documents (paths are validated against the repo at init time; missing paths are warned and skipped).
+- `dev-assistant issue create --id <id> --title <t> [--description <d>] [--force] [--experimental]` — scaffold one issue workspace. `--experimental` sets `experimental: true` in `issue.md` frontmatter; `/dev-execute` then skips all external operations (Jira, GitHub, push, PR, comments) for this issue's lifecycle.
+- `dev-assistant issue show --id <id>` — print the issue's metadata and which phase folders have content. Used by slash commands to load context.
+- `dev-assistant issue set-flag --id <id> --experimental/--no-experimental` — toggle the experimental flag on an existing issue's `issue.md` frontmatter. Inserts the field if absent, updates in place if present.
+- `dev-assistant issue archive --id <id> [--force]` — move an issue workspace from `issues/<id>/` to `archive/issues/<id>/`. Non-destructive (reversible by a manual `mv`). Updates `issue.md` frontmatter to `status: archived` with an `archived_at` timestamp. Refuses collisions unless `--force`. Used by `/dev-evaluate` sub-phase 5.4 at the user's option.
+- `dev-assistant commands install [--force]` — symlink the dev-assistant project's `.claude/commands/` into the current directory's `.claude/commands/` so the `/dev-*` slash commands are available when Claude Code is opened here. Source is auto-detected via the editable install.
+- `dev-assistant strategies show <name>` — print the effective content of a strategy. Resolves the per-repo override at `.dev-assistant/strategies/<name>.md` first; falls back to the source default at `templates/<name>.md`. Output is prefixed with an HTML comment noting which source was used.
+- `dev-assistant strategies customize <name> [--force]` — copy a source-default strategy into the per-repo workspace so the user can edit it. After this, the strategy resolves to the per-repo file. Delete the file to revert.
+- `dev-assistant repo-context show` — print the resolved repo-context: the pointer file plus inlined content from every H2 whose text resolves to an existing repo-relative file. H2s that don't resolve are treated as freeform section titles. Consumed by every phase slash command.
+- `dev-assistant repo-context list` — list entries with status (`[file]` resolves, `[MISSING]` looks like a path but file not found, `[section]` freeform title).
+- `dev-assistant repo-context add <path> [--note "..."] [--force]` — append a pointer (refuses if the path doesn't exist; `--force` allows forward references). Creates `.dev-assistant/repo-context.md` with a standard preamble if it doesn't exist yet.
+- `dev-assistant repo-context remove <path>` — drop an entry (the H2 header text matches verbatim; the section runs to the next `## ` or end of file).
+
+### Likely future helpers
+
+- `dev-assistant issue list` — list all issue workspaces with status (active vs archived).
+- `dev-assistant phase complete --issue <id> --phase <name>` — mark a phase done in state.
+- `dev-assistant lesson add --issue <id>` — append a lesson to the repo-specific archive.
+- `dev-assistant commands uninstall` — remove the symlink.
+
+## Slash Command Surface
+
+### Implemented
+
+- `/dev-gather <issue-id>` — walks the gather phase in five announced sub-stages (source inventory → information collection per source → process objectives confirmation → draft issue objectives → validation and write). Produces **two artifacts**: a thinking artifact (`gathering/report.md`) preserving full source content + analysis, and a decision artifact (`gathering/objectives.md`) with distilled objectives that later phases consume.
+
+- `/dev-plan <issue-id>` — walks the plan phase in five announced sub-stages (context load → decomposition proposal → subtask elaboration → sequencing and branch info → viability check and write). Produces **two artifacts**: a thinking artifact (`plan/report.md`) covering decomposition approach, sequencing rationale, alternatives considered, viability outcomes, and risks; and a decision artifact (`plan/plan.md`) with branch info, coverage map, dependency graph, and full subtask specs inline. Pure planning — no side effects (no GitHub issue, no branch, no commits, no PR). Model: Opus.
+
+- `/dev-execute <issue-id> [subtask-n | wrap-up]` — executes one subtask per invocation, or runs wrap-up after all subtasks are done. Four sub-phases per invocation: **1a external preparation** (optional, always-ask: create Jira subtask, populate description, create GH issue), **1b local branch preparation** (automatic, no confirm: fetch + branch-from-latest-version, or branch-from-HEAD in experimental mode), **2 implementation plan** (orchestrator drafts, mechanical checks with up to 2 internal re-drafts, user approves / refines / abandons via a summary), **3 execute the work** (per-commit subagent dispatch with Sonnet, orchestrator reviews diff, commits with no `--no-verify`, verifies subtask-level passing criteria with one auto-fix retry), then **4 wrap-up** at the end of all subtasks (rebase, push, PR open, Jira comment — all individually confirmed; team message generated locally in Spanish; wrap-up report written). Experimental mode (set via `issue create --experimental`) skips all external operations. Model: Opus orchestrator, Sonnet subagent for code writing.
+
+- `/dev-feedback <issue-id>` — walks **one round** of the post-PR review loop. Re-invokable: each call processes only comments newer than the last round's pull timestamp. Five sub-phases per round: **1 pull** (fetch new comments from PR issue-comments + review-thread comments + review summaries, filtering own replies and resolved threads), **2 triage** (auto-classify each comment by severity `blocking-correctness | blocking-design | should-fix | nit | question | praise` and type `bug | security | design | perf | tests | style | docs | question | discussion`, cluster by file/area/concern, user reviews and can reclassify / defer / abandon), **3 plan** (per cluster: draft `impl-plan.md` for code-fix clusters; draft `reply.md` for every cluster), **4 apply** (per code-fix cluster in severity order: orchestrator shows impl-plan summary, user approves / refines / skips with a nits-batching shortcut, Sonnet subagent writes the fix, orchestrator reviews diff, commits one per cluster with no `--no-verify`), **5 wrap** (assemble **ALL** drafted replies into one batch view paired with reviewer quotes — this is a non-negotiable single user checkpoint before any reply leaves the local machine — then push with confirmation, post replies, optionally resolve threads with confirmation, write round report). Experimental issues are blocked at pre-flight since they have no PR. Output structure: `feedback/round-NN/` with `pulled.md`, `triage.md`, `clusters/<NN-slug>/{meta,impl-plan,reply}.md`, and `report.md`. Model: Opus orchestrator, Sonnet subagent for code writing.
+
+- `/dev-evaluate <issue-id>` — final phase. Reads every prior-phase artifact (gathering, plan, execution, feedback rounds, PR state) and produces a retrospective + archives lessons + closes the loop externally. Five sub-phases: **1 load** (read all artifacts, classify PR as `merged | closed-unmerged | open | n/a`), **2 analyze** (outcomes against original objectives + drift from plan, both held in memory), **3 retro** (draft `evaluation/retro.md` thinking artifact and `evaluation/lessons.md` per-issue decision artifact with category process/technical/collaboration and `promotion_candidate` flag; user reviews and edits before approval), **4 external** (idempotency check skips already-completed ops; then PR-state-gated batch of: GH issue closure comment, Jira subtask transitions, Jira parent transition, GH issue close — assembled into ONE batch view for user approval before any fires; on `open` PR only the interim-retro comment posts, all transitions and close deferred), **5 archive** (writes one file per lesson to repo-wide `.dev-assistant/lessons/<YYYY-MM-DD>-<id>-<slug>.md`, writes `evaluation/report.md`, offers optional workspace cleanup — opt-in, manual `rm -rf` until `dev-assistant issue close` is implemented). Experimental mode skips sub-phase 4 entirely. Re-runnable: PR-state changes pick up newly-allowed transitions on next invocation. Model: Opus orchestrator, no subagent (pure retrospective work).
+
+### Gather phase output structure
+
+Two files in `.dev-assistant/issues/<id>/gathering/`:
+
+**`report.md` — the thinking artifact.** Full record of what was gathered. Sections:
+- Summary
+- Sources (one section per consulted source: JIRA, Repository, Meeting notes, Direct input — with actual content, quoted where it matters)
+- Analysis (patterns, tensions, assumptions called out, things excluded from objectives and why)
+- How this maps to objectives (traces objectives back to evidence)
+- What's missing (gaps and unanswered things)
+
+**`objectives.md` — the decision artifact.** Tight, focused, what later phases read:
+- Pointer to `report.md` for full context
+- Process objectives (from `strategies/process-objectives.md`, possibly trimmed)
+- Issue objectives: general (one sentence) + specific (3–7 testable items)
+- Constraints
+- Open questions
+
+Both use checkbox-style for objectives so later phases can flip items as work proceeds.
+
+Sources of information feeding the gather phase: JIRA (via Atlassian MCP when available), the repo (via Read/Grep/Glob), meeting notes (pasted by user), direct conversation. The slash command asks which subset to consult at the start of every run.
+
+**Direct input** sub-stage is guided by five fixed questions (problem-in-own-words → background-not-in-ticket → other-people-with-context → undocumented-constraints → most-uncertain-thing) asked one at a time. The slash command explicitly instructs Claude to **stop and wait for the user's response** in this sub-stage and the other interactive ones, including under autonomous / auto-accept modes — earlier runs were skipping interactive prompts in those modes.
+
+### Next up
+
+All five phase slash commands are implemented. Remaining work is in CLI helpers and quality-of-life additions — see "Deferred / Next Up" below.
+
+## CLI Conventions
+
+- **Subcommand pattern**: noun-verb (`issue create`, `issue show`), like `gh`, `docker`, `kubectl`.
+- **Active issue**: every command takes an explicit `--issue <id>` (or `--id` for the `issue` subapp). No ambient state, no wrong-pointing.
+- **Folder collision on `issue create`**: errors unless `--force`.
+- **Help style**: plain Unix-style (Typer's Rich integration disabled with `rich_markup_mode=None`), matching the helper-tool role.
+
+## MCP Integration Model
+
+MCP servers are only accessible inside Claude Code, not from a raw terminal. So integrations like Atlassian/Jira lookup live in the **slash command** layer, not in the CLI itself.
+
+For example, future `/dev-issue-new <issue-id>` will:
+
+1. Check: is Atlassian MCP available?
+2. If yes → fetch issue from Jira → confirm with user → invoke `!dev-assistant issue create --id <id> --title <fetched-title>`.
+3. If no → ask "set up MCP?". On yes → walk setup → retry. On no → fall back to manual entry, then invoke the CLI.
+
+The CLI itself stays dumb — it just scaffolds folders with whatever the slash command hands it.
+
+## Stack
+
+- Python ≥ 3.10
+- [Typer](https://typer.tiangolo.com/) for the CLI framework (Rich off for plain help)
+- Installed via `pip install --user --break-system-packages -e .` during dev (or `pipx install -e .` when pipx is available)
+
+No PyPI distribution. No tests / lint / CI yet. The project itself is a normal git repo and is version-controlled. The `.dev-assistant/` folders the tool *creates* in target repos are intentionally untracked.
+
+## How to Pick This Up in a Future Session
+
+1. Read this `DESIGN.md`.
+2. Read the memory entries in `~/.claude/projects/-home-juan-documents-creai-research-dev-assistant/memory/` for any deltas since this doc was written.
+3. CLI source is in `src/dev_assistant/cli.py` — single file, simple, start there.
+4. Slash command sources are in `.claude/commands/dev-*.md` — markdown with shell `!` calls into the CLI.
+5. Recent `git log` shows what's been done and pending.
+
+## Deferred / Next Up
+
+- Atlassian / Jira MCP path: `/dev-issue-new` that fetches from Jira before scaffolding the local issue workspace.
+- State transitions: `dev-assistant phase complete`, `lesson add` (would be invoked by `/dev-evaluate` once they exist).
+- Promotion path: repo-specific lessons → global zone-1 updates. Lessons already carry a `promotion_candidate` flag; the promotion command itself is still missing.
+- Parallel subtask execution via subagent fan-out (currently `/dev-execute` is per-subtask serial).
+- Autonomous evaluator loop in `/dev-execute` sub-phase 2 — see `IDEAS.md`.
+- Eventually: promote slash commands from project-local to global, package for distribution.
