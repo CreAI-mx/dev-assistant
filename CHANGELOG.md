@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is in alpha (`0.x`), breaking changes may land in any minor version.
 
+## [0.3.0] - 2026-06-03
+
+Adds the reviewer side: reviewing *someone else's* PR, the mirror image of `/dev-feedback`.
+
+### Added
+
+- **`/dev-review <pr-number-or-url>`** — review a PR in five sub-phases: **gather** (PR description + linked GH issue + linked Jira ticket, then commits / diff / CI / checkout / blast radius, distilled into objectives), **brief + Q&A** (a plain-words `understanding.md`; three background Sonnet reviewers — correctness, tests, conventions — start immediately while the user asks questions; questions can become findings, corrections update the brief), **deep review** (the objective-coverage pass waits for the discussion and is informed by it — hybrid sequencing; findings merged, orchestrator-verified, classified with the `/dev-feedback` taxonomy extended with `blocking-objective` ranked above bugs), **select** (the user picks exactly which findings post — unselected findings never reach GitHub), **post** (everything submits atomically as one GitHub review: one notification, verdict chosen by the user). Read-only by design — no commits, no pushes; the only external write is the gated review submission. Re-invokable: later rounds review only the delta since `last_reviewed_sha`.
+- CLI: `dev-assistant review create --pr <n> [--url] [--title] [--force]` and `review show --pr <n>` — reviewer-side counterparts of `issue create` / `issue show`. Workspaces live at `.dev-assistant/reviews/pr-<n>/` with one `round-NN/` folder per invocation (`context.md`, `understanding.md`, `findings.md`, `comments/`, `report.md`).
+- `comment-style.md` strategy: review attribution footer — one line at the end of the review summary (never per-comment): *Drafted with dev-assistant · each comment human-approved*.
+- `init` now scaffolds `reviews/` alongside `issues/`; `/dev-review` creates it on demand in repos initialized before 0.3.0.
+- 5 new CLI tests (13 total).
+
 ## [0.2.0] - 2026-06-02
 
 Adds an opt-in per-issue branching mode so large issues can land as several small PRs instead of one big one.

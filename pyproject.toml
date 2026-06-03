@@ -1,6 +1,6 @@
 [project]
 name = "dev-assistant"
-version = "0.2.0"
+version = "0.3.0"
 description = "AI-powered developer assistant CLI that standardizes work across gather → plan → execute → feedback → evaluate phases."
 readme = "README.md"
 requires-python = ">=3.10"

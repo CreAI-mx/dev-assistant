@@ -58,6 +58,16 @@ Resolved in <PR URL>.
 Blocked on <other ticket or person>. Will resume when <unblock condition>.
 ```
 
+### Review attribution footer (used by /dev-review)
+
+The last line of every review **summary** posted by /dev-review — once per review, never on individual inline comments:
+
+```
+*Drafted with [dev-assistant](https://github.com/juangonzalez-creai/dev-assistant) · each comment human-approved*
+```
+
+One line, italic, after a blank line at the end of the summary body. Customize per-repo by editing this section in a per-repo override.
+
 ## What to avoid
 
 - **Restating the issue description.** "So as we discussed in this issue, the problem is…" — the issue is right there.

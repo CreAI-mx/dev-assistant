@@ -17,7 +17,7 @@ def test_help_lists_top_level_commands(runner: CliRunner) -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     output = result.stdout
-    for expected in ("init", "issue", "commands", "strategies", "repo-context"):
+    for expected in ("init", "issue", "review", "commands", "strategies", "repo-context"):
         assert expected in output, f"expected '{expected}' in --help output:\n{output}"
 
 
@@ -34,7 +34,7 @@ def test_init_creates_workspace(runner: CliRunner, chdir_tmp: Path) -> None:
 
     workspace = chdir_tmp / WORKSPACE_DIRNAME
     assert workspace.is_dir()
-    for sub in ("issues", "strategies", "lessons"):
+    for sub in ("issues", "reviews", "strategies", "lessons"):
         assert (workspace / sub).is_dir(), f"missing workspace subfolder: {sub}"
 
 
@@ -103,6 +103,77 @@ def test_experimental_flag_recorded(runner: CliRunner, chdir_tmp: Path) -> None:
         chdir_tmp / WORKSPACE_DIRNAME / "issues" / "EXP-1" / "issue.md"
     ).read_text()
     assert "experimental: true" in issue_md
+
+
+def test_review_create_without_init_fails(runner: CliRunner, chdir_tmp: Path) -> None:
+    result = runner.invoke(app, ["review", "create", "--pr", "123"])
+    assert result.exit_code == 1
+    assert "init" in (result.stderr + result.stdout)
+
+
+def test_review_create_produces_workspace_and_metadata(
+    runner: CliRunner, chdir_tmp: Path
+) -> None:
+    runner.invoke(app, ["init"])
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "create",
+            "--pr",
+            "123",
+            "--url",
+            "https://github.com/org/repo/pull/123",
+            "--title",
+            "Add retry logic",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+
+    review_dir = chdir_tmp / WORKSPACE_DIRNAME / "reviews" / "pr-123"
+    assert review_dir.is_dir()
+
+    review_md = (review_dir / "review.md").read_text()
+    assert "pr: 123" in review_md
+    assert "pr_url: https://github.com/org/repo/pull/123" in review_md
+    assert "title: Add retry logic" in review_md
+    assert "last_reviewed_sha: null" in review_md
+
+
+def test_review_create_refuses_collision_without_force(
+    runner: CliRunner, chdir_tmp: Path
+) -> None:
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["review", "create", "--pr", "123"])
+    result = runner.invoke(app, ["review", "create", "--pr", "123"])
+    assert result.exit_code == 1
+    assert "already exists" in (result.stderr + result.stdout)
+
+    result = runner.invoke(app, ["review", "create", "--pr", "123", "--force"])
+    assert result.exit_code == 0
+
+
+def test_review_show_lists_rounds(runner: CliRunner, chdir_tmp: Path) -> None:
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["review", "create", "--pr", "123"])
+
+    review_dir = chdir_tmp / WORKSPACE_DIRNAME / "reviews" / "pr-123"
+    round_dir = review_dir / "round-01"
+    round_dir.mkdir()
+    (round_dir / "context.md").write_text("ctx")
+    (round_dir / "understanding.md").write_text("brief")
+
+    result = runner.invoke(app, ["review", "show", "--pr", "123"])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "pr: 123" in result.stdout
+    assert "round-01: context.md, understanding.md" in result.stdout
+
+
+def test_review_show_missing_pr_fails(runner: CliRunner, chdir_tmp: Path) -> None:
+    runner.invoke(app, ["init"])
+    result = runner.invoke(app, ["review", "show", "--pr", "999"])
+    assert result.exit_code == 1
+    assert "not found" in (result.stderr + result.stdout)
 
 
 def test_issue_archive_moves_workspace(runner: CliRunner, chdir_tmp: Path) -> None:

@@ -69,7 +69,8 @@ After `dev-assistant init` in a target repo:
 
 ```
 .dev-assistant/
-├── issues/             # workspaces — one folder per active work item
+├── issues/             # workspaces — one folder per active work item (author side)
+├── reviews/            # PR review workspaces — one folder per reviewed PR (reviewer side)
 ├── archive/issues/     # archived issue workspaces (kept after /dev-evaluate); created on demand
 ├── strategies/         # empty by default; holds per-repo strategy overrides
 └── lessons/            # repo-specific lessons archive (zone-3 slice)
@@ -103,7 +104,7 @@ Configuration:
 - At init: `dev-assistant init --with-context <path>...` seeds the pointer file with one or more existing rules documents.
 - Later: `dev-assistant repo-context add <path> [--note "..."]`, `dev-assistant repo-context remove <path>`, `dev-assistant repo-context list`.
 
-Repo context is consumed by all five phase slash commands (`/dev-gather`, `/dev-plan`, `/dev-execute`, `/dev-feedback`, `/dev-evaluate`).
+Repo context is consumed by all five phase slash commands (`/dev-gather`, `/dev-plan`, `/dev-execute`, `/dev-feedback`, `/dev-evaluate`) and by `/dev-review`.
 
 After `dev-assistant issue create --id PROJ-123 --title "..."`:
 
@@ -114,6 +115,19 @@ After `dev-assistant issue create --id PROJ-123 --title "..."`:
 ├── plan/               # plan phase output
 ├── execution/          # execution notes / decisions
 └── evaluation/         # retro / lessons-to-promote
+```
+
+After `dev-assistant review create --pr 123` (invoked by `/dev-review`):
+
+```
+.dev-assistant/reviews/pr-123/
+├── review.md           # frontmatter state: pr, pr_url, last_reviewed_sha, last_verdict
+└── round-NN/           # one folder per /dev-review invocation
+    ├── context.md      # thinking artifact — everything gathered (PR + issue + Jira + code)
+    ├── understanding.md# decision artifact — the plain-words brief (+ corrections from Q&A)
+    ├── findings.md     # merged, verified, classified findings with selection marks
+    ├── comments/       # one draft per selected finding + summary.md
+    └── report.md       # round outcome; what round N+1 reads first
 ```
 
 ## Where Do Slash Commands Live?
@@ -142,6 +156,8 @@ The CLI is the deterministic substrate. It does not implement phases (those are 
 - `dev-assistant issue show --id <id>` — print the issue's metadata and which phase folders have content. Used by slash commands to load context.
 - `dev-assistant issue set-flag --id <id> --experimental/--no-experimental` — toggle the experimental flag on an existing issue's `issue.md` frontmatter. Inserts the field if absent, updates in place if present.
 - `dev-assistant issue archive --id <id> [--force]` — move an issue workspace from `issues/<id>/` to `archive/issues/<id>/`. Non-destructive (reversible by a manual `mv`). Updates `issue.md` frontmatter to `status: archived` with an `archived_at` timestamp. Refuses collisions unless `--force`. Used by `/dev-evaluate` sub-phase 5.4 at the user's option.
+- `dev-assistant review create --pr <n> [--url <u>] [--title <t>] [--force]` — scaffold one PR review workspace at `reviews/pr-<n>/` (reviewer-side counterpart of `issue create`). Round folders are created by `/dev-review`, not here.
+- `dev-assistant review show --pr <n>` — print the review's metadata (review.md) and per-round file progress. Called by `/dev-review` to load context at the start of a round.
 - `dev-assistant commands install [--force]` — symlink the dev-assistant project's `.claude/commands/` into the current directory's `.claude/commands/` so the `/dev-*` slash commands are available when Claude Code is opened here. Source is auto-detected via the editable install.
 - `dev-assistant strategies show <name>` — print the effective content of a strategy. Resolves the per-repo override at `.dev-assistant/strategies/<name>.md` first; falls back to the source default at `templates/<name>.md`. Output is prefixed with an HTML comment noting which source was used.
 - `dev-assistant strategies customize <name> [--force]` — copy a source-default strategy into the per-repo workspace so the user can edit it. After this, the strategy resolves to the per-repo file. Delete the file to revert.
@@ -171,6 +187,8 @@ The CLI is the deterministic substrate. It does not implement phases (those are 
 
 - `/dev-evaluate <issue-id>` — final phase. Reads every prior-phase artifact (gathering, plan, execution, feedback rounds, PR state) and produces a retrospective + archives lessons + closes the loop externally. Five sub-phases: **1 load** (read all artifacts, classify PR as `merged | closed-unmerged | open | n/a`), **2 analyze** (outcomes against original objectives + drift from plan, both held in memory), **3 retro** (draft `evaluation/retro.md` thinking artifact and `evaluation/lessons.md` per-issue decision artifact with category process/technical/collaboration and `promotion_candidate` flag; user reviews and edits before approval), **4 external** (idempotency check skips already-completed ops; then PR-state-gated batch of: GH issue closure comment, Jira subtask transitions, Jira parent transition, GH issue close — assembled into ONE batch view for user approval before any fires; on `open` PR only the interim-retro comment posts, all transitions and close deferred), **5 archive** (writes one file per lesson to repo-wide `.dev-assistant/lessons/<YYYY-MM-DD>-<id>-<slug>.md`, writes `evaluation/report.md`, offers optional workspace cleanup — opt-in, manual `rm -rf` until `dev-assistant issue close` is implemented). Experimental mode skips sub-phase 4 entirely. Re-runnable: PR-state changes pick up newly-allowed transitions on next invocation. Model: Opus orchestrator, no subagent (pure retrospective work).
 
+- `/dev-review <pr-number-or-url>` — **reviewer side**: review *someone else's* PR (the mirror image of `/dev-feedback`, which handles incoming review on your own PR). Re-invokable: round 01 reviews the whole PR; after the author pushes, the next round reviews only the delta since `last_reviewed_sha` (tracked in `reviews/pr-<n>/review.md`). Five sub-phases per round: **1 gather** (intent first — PR description, linked GH issue, linked Jira ticket via Atlassian MCP with paste/skip fallback — then code: per-commit narrative, diff, CI status, PR-branch checkout, blast-radius scan of changed-function call sites; writes `context.md` with distilled objectives traced to sources), **2 brief + Q&A** (writes `understanding.md` — what was asked / what the PR claims / what it actually changes / gaps / risk map — then immediately launches three background Sonnet reviewers for the small-scale dimensions (correctness, tests, conventions) while the user reads the brief and asks questions in the foreground; user questions can become findings (`source: user`) and corrections update the brief), **3 deep review** (the objective-coverage pass deliberately waits for the Q&A to settle since it's the dimension the discussion informs — hybrid sequencing; then collect background results, dedup, orchestrator-verify every finding against the real diff, classify with the `/dev-feedback` severity taxonomy extended with `blocking-objective` at the top: objective gaps rank above bugs), **4 select** (findings table sorted critical → trivial; the user explicitly picks which findings become review comments — nothing unselected ever reaches GitHub; drafts per-finding comment files + a summary with proposed verdict and the attribution footer from `comment-style`), **5 post** (one batch view of all comments + summary + verdict — single checkpoint — then submits everything atomically as **one** GitHub review via the pulls/reviews API: one notification to the author; never falls back to comment-by-comment posting). Read-only by design: no commits, no pushes; the only external write is the gated review submission. Attribution: one footer line in the review summary only, never per-comment. Workspace: `.dev-assistant/reviews/pr-<n>/round-NN/` with `context.md`, `understanding.md`, `findings.md`, `comments/`, `report.md`. Model: Opus orchestrator, Sonnet background reviewers.
+
 ### Gather phase output structure
 
 Two files in `.dev-assistant/issues/<id>/gathering/`:
@@ -197,7 +215,7 @@ Sources of information feeding the gather phase: JIRA (via Atlassian MCP when av
 
 ### Next up
 
-All five phase slash commands are implemented. Remaining work is in CLI helpers and quality-of-life additions — see "Deferred / Next Up" below.
+All five phase slash commands are implemented, plus the reviewer-side `/dev-review` (not a lifecycle phase — it stands alone, since the user is the reviewer, not the author). Remaining work is in CLI helpers and quality-of-life additions — see "Deferred / Next Up" below.
 
 ## CLI Conventions
 

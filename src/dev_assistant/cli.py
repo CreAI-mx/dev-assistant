@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 
 WORKSPACE_DIRNAME = ".dev-assistant"
-WORKSPACE_SUBFOLDERS = ("issues", "strategies", "lessons")
+WORKSPACE_SUBFOLDERS = ("issues", "reviews", "strategies", "lessons")
 PHASE_SUBFOLDERS = ("gathering", "plan", "execution", "evaluation")
 
 app = typer.Typer(
@@ -29,6 +29,14 @@ issue_app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 app.add_typer(issue_app, name="issue")
+
+review_app = typer.Typer(
+    help="Manage PR review workspaces (reviewer side — someone else's PR).",
+    no_args_is_help=True,
+    rich_markup_mode=None,
+    pretty_exceptions_enable=False,
+)
+app.add_typer(review_app, name="review")
 
 commands_app = typer.Typer(
     help="Manage the dev-assistant slash commands in the current repo.",
@@ -461,6 +469,121 @@ def issue_show(
             typer.echo(f"- {phase}: [empty]")
         else:
             typer.echo(f"- {phase}: {', '.join(files)}")
+
+
+@review_app.command("create")
+def review_create(
+    pr: Annotated[
+        int,
+        typer.Option("--pr", help="Pull request number on the current repo."),
+    ],
+    url: Annotated[
+        str | None,
+        typer.Option("--url", help="Full PR URL (recorded in review.md frontmatter)."),
+    ] = None,
+    title: Annotated[
+        str | None,
+        typer.Option("--title", help="PR title (recorded for quick identification)."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Overwrite the review folder if it already exists."),
+    ] = False,
+) -> None:
+    """Create a PR review workspace at reviews/pr-<N>/.
+
+    Reviewer-side counterpart of `issue create`: the workspace holds the
+    artifacts /dev-review produces while reviewing someone else's PR. Round
+    folders (round-NN/) are created by the slash command, not here.
+    """
+    root = _workspace_root()
+    if not root.is_dir():
+        _err(
+            f"{WORKSPACE_DIRNAME}/ not found in {Path.cwd()}. "
+            f"Run `dev-assistant init` first."
+        )
+        raise typer.Exit(code=1)
+
+    review_dir = root / "reviews" / f"pr-{pr}"
+    if review_dir.exists() and not force:
+        _err(
+            f"Review workspace for PR #{pr} already exists at {review_dir}. "
+            f"Use --force to overwrite."
+        )
+        raise typer.Exit(code=1)
+
+    if review_dir.exists() and force:
+        shutil.rmtree(review_dir)
+
+    review_dir.mkdir(parents=True)
+
+    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    review_md = (
+        "---\n"
+        f"pr: {pr}\n"
+        f"pr_url: {url or 'null'}\n"
+        f"title: {title or 'null'}\n"
+        f"created: {created_at}\n"
+        "status: active\n"
+        "last_reviewed_sha: null\n"
+        "---\n"
+        "\n"
+        "## Review workspace\n"
+        "\n"
+        f"Artifacts for the review of PR #{pr}. One `round-NN/` folder per "
+        "/dev-review invocation.\n"
+    )
+    (review_dir / "review.md").write_text(review_md)
+
+    _ok(f"Created review workspace for PR #{pr} at {review_dir}")
+
+
+@review_app.command("show")
+def review_show(
+    pr: Annotated[
+        int,
+        typer.Option("--pr", help="Pull request number to inspect."),
+    ],
+) -> None:
+    """Print the review's metadata and round progress.
+
+    Designed to be called from /dev-review to load context at the start of a
+    round. Output is plain markdown — review.md verbatim, followed by a round
+    progress section.
+    """
+    root = _workspace_root()
+    if not root.is_dir():
+        _err(
+            f"{WORKSPACE_DIRNAME}/ not found in {Path.cwd()}. "
+            f"Run `dev-assistant init` first."
+        )
+        raise typer.Exit(code=1)
+
+    review_dir = root / "reviews" / f"pr-{pr}"
+    if not review_dir.is_dir():
+        _err(f"Review workspace for PR #{pr} not found at {review_dir}.")
+        raise typer.Exit(code=1)
+
+    review_md = review_dir / "review.md"
+    if review_md.exists():
+        typer.echo(review_md.read_text().rstrip("\n"))
+    else:
+        typer.echo(f"(no review.md at {review_md})")
+
+    typer.echo()
+    typer.echo("## Round progress")
+    typer.echo()
+    rounds = sorted(
+        p for p in review_dir.iterdir() if p.is_dir() and p.name.startswith("round-")
+    )
+    if not rounds:
+        typer.echo("- (no rounds yet)")
+    for round_dir in rounds:
+        files = sorted(p.name for p in round_dir.iterdir() if p.is_file())
+        if not files:
+            typer.echo(f"- {round_dir.name}: [empty]")
+        else:
+            typer.echo(f"- {round_dir.name}: {', '.join(files)}")
 
 
 @strategies_app.command("show")
