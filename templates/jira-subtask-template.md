@@ -46,7 +46,7 @@ Jira uses its own markup (`h3.` for headings, `*` for italics, `(#)` for numbere
 - **Reference the parent ticket** so the subtask is obviously linked even if the Jira hierarchy is collapsed.
 - **Reference the branch** so reviewers can locate the work without digging.
 - **Keep passing criteria identical** to what's in `plan.md` — drift between Jira and dev-assistant artifacts causes confusion later.
-- **No PR link yet.** The PR opens at wrap-up, after all subtasks merge into one PR. Subtask-level Jira entries link to commits at most, not PRs.
+- **No PR link at creation.** In `single-branch` mode the PR opens at wrap-up, after all subtasks land in one PR — subtask-level Jira entries link to commits at most. In `sub-branches` mode, each subtask gets its own sub-PR at completion; `/dev-execute` offers to comment the sub-PR link on the Jira subtask once it opens (the link is a later comment, not part of this description).
 
 ## What to avoid
 

@@ -1,5 +1,5 @@
 ---
-description: Execute one subtask of an issue (or wrap up after all subtasks are done) — writes code, verifies passing criteria, commits, and at wrap-up opens the PR
+description: Execute one subtask of an issue (or wrap up after all subtasks are done) — writes code, verifies passing criteria, commits, opens the subtask's sub-PR in sub-branches mode, and at wrap-up opens the (parent) PR
 argument-hint: <issue-id> [subtask-n | wrap-up]
 model: opus
 allowed-tools: Bash(dev-assistant:*), Bash(git:*), Bash(gh:*), Read, Write, Edit, Grep, Glob, Agent
@@ -29,6 +29,8 @@ Read `.dev-assistant/issues/<issue-id>/issue.md` and check for `experimental: tr
 
 - **Sub-phase 1a** (external preparation): all prompts SKIPPED entirely. No Jira / GH ops attempted, no asking.
 - **Sub-phase 1b** (local branch): `git fetch origin` is SKIPPED. Branch is created from the current HEAD instead of from the latest `version/x.y.z` on origin.
+- **Branching mode**: forced to `single-branch` behavior regardless of `plan.md`'s `branching_mode` — sub-PRs can't open without external ops, so sub-branches would be pointless. Note this to the user if the plan says `sub-branches`.
+- **Sub-phase 3.8** (sub-PR): never runs (follows from the forced single-branch behavior).
 - **Sub-phase 4** (wrap-up): rebase, push, PR open, and Jira comment are all SKIPPED. Wrap-up report and team message are still written locally.
 
 Surface "experimental mode active — external ops will be skipped" up front so the user knows what's happening.
@@ -124,6 +126,8 @@ After 1a, summarize what was done: "Created Jira subtask VN-742-3; GH issue alre
 
 Local-only ops. **No user confirmation needed.** Just do it and report.
 
+Read `branching_mode` from `plan.md` frontmatter. Treat a missing field as `single-branch` (plans written before the field existed). In experimental mode, force `single-branch` behavior regardless of the plan.
+
 **Pre-flight:** verify the working tree is clean. If dirty, stop and tell the user *"Working tree has uncommitted changes. Commit, stash, or discard them before running execute."*
 
 **If `plan.md` frontmatter has `branch_created: false`** (this is the first subtask being executed for this issue):
@@ -135,13 +139,22 @@ Local-only ops. **No user confirmation needed.** Just do it and report.
   - Identify the highest `version/x.y.z` ref under `origin/` by semver. If there are none, stop with *"No `version/x.y.z` branch found on origin. Per the branching strategy, you need a sprint version branch before opening a feature branch."* (No confirmation; just stop.)
   - `git checkout -b feat/<TICKET>-<slug> origin/<latest version>`
 - Record `branch_created: true`, `branch_name: feat/<TICKET>-<slug>`, `branch_base: <version branch or HEAD>` in `plan.md` frontmatter.
+- **In `sub-branches` mode, additionally:** create the first subtask's sub-branch off the parent just created: `git checkout -b feat/<TICKET>-<slug>-sub-<N>`. Record `sub_branch: feat/<TICKET>-<slug>-sub-<N>` in subtask `N`'s frontmatter in `plan.md`.
 
-**Otherwise** (a feat branch already exists for this issue):
+**Otherwise** (the parent feat branch already exists for this issue):
 
-- Verify the current branch matches `plan.md`'s `branch_name`. If not, stop with *"Expected to be on `<branch>`, found `<current>`. Check out the right branch or reset state."*
-- Proceed.
+- **In `single-branch` mode:** verify the current branch matches `plan.md`'s `branch_name`. If not, stop with *"Expected to be on `<branch>`, found `<current>`. Check out the right branch or reset state."* Proceed.
+- **In `sub-branches` mode:**
+  - **Re-entering a subtask that already has `sub_branch` recorded:** verify the current branch matches it. If not, stop with the same message shape. Proceed.
+  - **Starting a new subtask `N`:** the sub-branch must be created from a tip that contains all prior subtasks' work.
+    - Check the previous subtask's `sub_pr_url` state: `gh pr view <sub_pr_url> --json state`.
+    - **If merged:** `git fetch origin`, `git checkout <branch_name>`, fast-forward to `origin/<branch_name>`, then `git checkout -b feat/<TICKET>-<slug>-sub-<N>`.
+    - **If not merged (or no `sub_pr_url` recorded):** stop and ask the user, two options:
+      - **(a) wait** — merge the previous sub-PR first, then re-invoke `/dev-execute`.
+      - **(b) stack** — create `sub-<N>` off the previous sub-branch tip. Record `stacked_on: <previous sub_branch>` in the subtask frontmatter. Warn: the sub-PR will show the stacked commits until the previous sub-PR merges; sub-phase 3.8 will rebase before opening it.
+  - Record `sub_branch` in subtask `N`'s frontmatter.
 
-Report: "On `feat/VN-742-oauth-flow` (created from `version/1.2.0`, base sha abc123)" or "On `feat/VN-742-oauth-flow` (existing branch)".
+Report (mode-dependent): "On `feat/VN-742-oauth-flow` (created from `version/1.2.0`, base sha abc123)", "On `feat/VN-742-oauth-flow` (existing branch)", or "On `feat/VN-742-oauth-flow-sub-2` (off `feat/VN-742-oauth-flow` @ abc123)".
 
 ---
 
@@ -340,7 +353,23 @@ What deviated, if anything.
 
 Update `plan.md` subtask frontmatter: `status: done`.
 
-### 3.8 — Report to user
+### 3.8 — Open the sub-PR (`sub-branches` mode only; CONFIRM each external op)
+
+In `single-branch` mode, skip this step entirely. (Experimental mode never reaches here in sub-branches form — it forces single-branch behavior.)
+
+After verification passes, land this subtask as its own PR against the parent feature branch:
+
+1. **Rebase onto the parent tip:** `git fetch origin`, then `git rebase origin/<branch_name>` (or local `<branch_name>` if the parent isn't on origin yet). If this subtask was `stacked_on` a prior sub-branch whose PR has since merged, this rebase is what untangles it. Conflicts → **hard stop**, same protocol as wrap-up rebase: list conflicting files, user resolves, re-invoke.
+2. **Push the parent first if needed:** if `origin/<branch_name>` doesn't exist, the sub-PR has no base. **Ask: "About to push parent branch `<branch_name>` to origin (needed as sub-PR base). Proceed?"** On confirm: `git push -u origin <branch_name>`.
+3. **Push the sub-branch (CONFIRM):** *"About to push `<sub_branch>` to origin. Proceed?"* — `git push -u origin <sub_branch>` (first push) or `--force-with-lease` (re-push after rebase).
+4. **Open the sub-PR (CONFIRM):** build title + body from `pr-template` scoped to this subtask (subtask objectives, passing-criteria results, commit list, link to the GH issue if `gh_issue_created`). **Display proposed title + body. Ask: "Open this sub-PR? Target: `<branch_name>`. Proceed?"** On confirm: `gh pr create --base <branch_name> --head <sub_branch> --title ... --body ...`. Record `sub_pr_url` in the subtask's frontmatter in `plan.md`.
+5. **Comment on the Jira subtask (optional, CONFIRM):** only if Atlassian MCP is available and `jira_subtask_key` is recorded — short comment per `comment-style`, e.g. `"Sub-PR opened: <url>. Targets <branch_name>."`
+
+Any step declined → stop here gracefully; record whatever state was reached. The user can finish manually (and paste `sub_pr_url` into `plan.md`) or re-invoke `/dev-execute <issue-id> <N>` to resume — sub-phase 1b will detect the existing `sub_branch` and skip to whatever's missing.
+
+Sub-PRs merge into the **parent feature branch**, never into the version branch, and merge sequentially (`sub-1` before `sub-2`) per the branching strategy. The user merges on GitHub after review; `/dev-feedback <issue-id> <N>` handles review rounds on a sub-PR.
+
+### 3.9 — Report to user
 
 Terse summary:
 
@@ -349,7 +378,9 @@ Subtask N complete: 2 commits, 3/3 criteria verified.
 Next: subtask N+1 (`/dev-execute <issue-id>` to continue) — or all subtasks done, ready for wrap-up.
 ```
 
-If this was the last pending subtask, suggest `/dev-execute <issue-id> wrap-up` as the explicit next step (or note that re-invoking `/dev-execute <issue-id>` will auto-enter wrap-up mode).
+In `sub-branches` mode, add the sub-PR line: `Sub-PR: <url> → <branch_name> (merge before starting subtask N+1, or stack)`.
+
+If this was the last pending subtask, suggest `/dev-execute <issue-id> wrap-up` as the explicit next step (or note that re-invoking `/dev-execute <issue-id>` will auto-enter wrap-up mode). In `sub-branches` mode, note that wrap-up requires all sub-PRs merged first.
 
 ---
 
@@ -363,8 +394,9 @@ Verify:
 
 - All subtasks `status: done` in `plan.md`
 - Working tree clean (`git status` shows nothing)
-- Current branch matches `plan.md`'s `branch_name`
+- Current branch matches `plan.md`'s `branch_name` — in `sub-branches` mode, check out the parent branch first if currently on a sub-branch (`git checkout <branch_name>`, then fast-forward to `origin/<branch_name>`)
 - In normal mode: `origin/<target version branch>` exists (will be needed for rebase)
+- **In `sub-branches` mode additionally:** every subtask has a `sub_pr_url` and every sub-PR is **merged** (`gh pr view <url> --json state,merged` per subtask). If any are missing or still open, stop and list them: *"Sub-PRs not merged: subtask 2 (<url>, OPEN), subtask 4 (no sub-PR). Merge them into `<branch_name>` first, then re-invoke wrap-up."*
 
 If any fail → stop with a clear message. No external ops attempted.
 
@@ -409,7 +441,7 @@ In experimental mode, skip PR open entirely.
 
 Otherwise:
 
-- Build the PR title and body from `pr-template`, populated with subtask summaries, the GH issue link (if `gh_issue_created`), and commit references.
+- Build the PR title and body from `pr-template`, populated with subtask summaries, the GH issue link (if `gh_issue_created`), and commit references. In `sub-branches` mode, include a "Sub-PRs" section listing each subtask's merged sub-PR (`#num — title`) so reviewers know the pieces were already reviewed individually.
 - **Display the proposed title + body. Ask user: "Open this PR? Target: `<version branch>`. Proceed?"**
 - On confirm: `gh pr create --title "<title>" --body "<body>" --base "<version branch>"`. Capture the returned URL.
 - On decline: stop wrap-up. PR can be opened manually later.
@@ -479,6 +511,7 @@ One paragraph: what was achieved against the original objectives from `gathering
 - Jira subtasks created: [list keys, or "none" if experimental / all deferred]
 - GitHub issue: #<num> or "not created"
 - PR opened: <url> or "not opened (experimental / deferred)"
+- Sub-PRs: [list of merged sub-PR URLs per subtask, or "n/a (single-branch)"]
 - Branch: <branch> → <target>
 
 ## Deviations from plan
@@ -514,6 +547,7 @@ Next: /dev-evaluate <issue-id> (not yet implemented).
 - **Re-running on a subtask with `status: done`**: warn the user — "Subtask N is already complete. To redo it, `git reset --hard <prior sha>` first and reset the subtask status in `plan.md`. Proceed only if you've done that."
 - **Re-running for wrap-up after wrap-up already ran**: detect `pr_url` in `plan.md` — if present, this is an update-mode invocation. Offer to update the PR body (re-render from current state and `gh pr edit`), but **do not open a second PR**.
 - **Mid-subtask interruption**: state may be inconsistent (some commits made, criteria not yet verified). On re-entry, detect commits ahead of `branch_base` for this subtask and either resume verification or surface the inconsistency for user resolution.
+- **Sub-branches mode state** lives in per-subtask frontmatter: `sub_branch`, `sub_pr_url`, and (when stacked) `stacked_on`. A subtask with `status: done` but no `sub_pr_url` means 3.8 was declined or interrupted — re-invoking `/dev-execute <issue-id> <N>` resumes at 3.8 rather than redoing the work.
 
 ## If something fails in a destructive-feeling way
 

@@ -59,7 +59,7 @@ Pass via HEREDOC to preserve newlines.
 ## Rules
 
 1. **Never commit directly to `develop` or to a sprint version branch.** All changes go through a PR. No exceptions.
-2. **One Jira ticket = one GitHub issue = one `feat/` branch = one checklist item** on the sprint version PR.
+2. **One Jira ticket = one GitHub issue = one `feat/` branch = one checklist item** on the sprint version PR. This refers to the **parent** ticket: Jira subtasks live under it and never get their own GitHub issue or checklist item — at most they get a sub-branch and sub-PR off the parent `feat/` branch, all referencing the same GitHub issue.
 3. **Rebase, not merge, before review.** Push with `--force-with-lease` after rebasing. Linear history is mandatory.
 4. **Commit type must match branch purpose.** A `feat/` branch carries `feat | refactor | test | chore | docs` commits — and `fix` only when the branch is bug-driven.
 5. **Delete branches after merge.** Stale branches are noise. Feature and version branches are deleted as soon as they're merged.
@@ -93,6 +93,8 @@ git checkout -b feat/<TICKET>-<slug>
 ### 4. (Optional) Sub-branches for large features
 
 If a feature is too large to review in one PR, split into sub-branches off the parent feature branch. Merge subs into the parent feature branch, **not** into the version branch.
+
+In dev-assistant, this choice is made at plan time: `/dev-plan` records `branching_mode: sub-branches` in `plan.md`, and `/dev-execute` then creates one sub-branch + sub-PR per subtask (sub-PR opens at subtask completion; the parent PR opens at wrap-up once all subs are merged).
 
 ```bash
 git checkout feat/<TICKET>-<slug>

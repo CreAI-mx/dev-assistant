@@ -1,6 +1,6 @@
 ---
 description: Walk one round of the PR review feedback loop — pulls new comments, triages by severity+type, clusters them, drafts code fixes and replies, applies fixes as commits, batch-reviews ALL replies in one go, then pushes and posts them
-argument-hint: <issue-id>
+argument-hint: <issue-id> [subtask-n]
 model: opus
 allowed-tools: Bash(dev-assistant:*), Bash(git:*), Bash(gh:*), Read, Write, Edit, Grep, Glob, Agent
 ---
@@ -11,7 +11,12 @@ This phase handles **one round** of PR review iteration. Each invocation = one r
 
 ## Argument parsing
 
-`$ARGUMENTS` is the issue ID, possibly followed by extra whitespace. Take the first whitespace-separated token as the issue ID. No other arguments are supported in v1.
+`$ARGUMENTS` is the issue ID, optionally followed by a subtask number. Take the first whitespace-separated token as the issue ID.
+
+- **`<issue-id>` alone** — the round targets the issue's main PR (`pr_url` in `plan.md` frontmatter). This is the only form valid in `single-branch` mode.
+- **`<issue-id> <N>`** — only valid when `plan.md` has `branching_mode: sub-branches`: the round targets subtask `N`'s sub-PR (`sub_pr_url` in the subtask's frontmatter) on its `sub_branch`. If the plan is `single-branch`, stop with *"This issue uses single-branch mode — there are no sub-PRs. Run `/dev-feedback <issue-id>`."*
+
+In `sub-branches` mode with no subtask argument: if the parent `pr_url` is not yet set but open sub-PRs exist, list them and ask which one to run the round against, rather than failing on the missing parent PR.
 
 ## Current state of the issue
 
@@ -29,9 +34,9 @@ Before doing anything, verify all of:
 
 1. **Issue workspace exists** — if `.dev-assistant/issues/<issue-id>/` is missing, stop with *"No workspace for `<issue-id>`. Run `/dev-gather` first."*.
 2. **Plan exists** — if `plan/plan.md` is missing, stop with *"No plan for `<issue-id>`. Run `/dev-plan` first."*.
-3. **PR has been opened** — read `plan.md` frontmatter for `pr_url`. If missing or null, stop with *"`pr_url` is not set in `plan.md`. Run `/dev-execute <issue-id>` through wrap-up to open the PR first."*.
+3. **Target PR has been opened** — resolve per the argument parsing above: the parent `pr_url` from `plan.md` frontmatter, or subtask `N`'s `sub_pr_url`. If the resolved URL is missing or null, stop with *"`pr_url` is not set in `plan.md`. Run `/dev-execute <issue-id>` through wrap-up to open the PR first."* (or, for a subtask target: *"Subtask `N` has no `sub_pr_url`. Run `/dev-execute <issue-id> <N>` through sub-phase 3.8 to open the sub-PR first."*). Everywhere below, "the PR" / `pr_url` means this resolved target.
 4. **Working tree clean** — `git status --porcelain` returns nothing. If dirty, stop with *"Working tree has uncommitted changes. Commit, stash, or discard them before running feedback."*.
-5. **On the right branch** — current branch matches `plan.md`'s `branch_name`. If not, stop with *"Expected to be on `<branch>`, found `<current>`. Check out the right branch first."*.
+5. **On the right branch** — current branch matches the target PR's branch: `plan.md`'s `branch_name`, or the subtask's `sub_branch` when targeting a sub-PR. If not, stop with *"Expected to be on `<branch>`, found `<current>`. Check out the right branch first."*.
 6. **Not experimental** — read `issue.md` frontmatter. If `experimental: true`, stop with *"Experimental mode is active for `<issue-id>`. No PR exists to review. `/dev-feedback` is skipped."*. (Experimental mode never opens a PR, so there is nothing to feed back on.)
 7. **`gh` CLI authenticated** — `gh auth status` exits cleanly. If not, stop with *"`gh` is not authenticated. Run `gh auth login` first."*.
 
@@ -84,14 +89,14 @@ If the user is in auto mode and an external op is about to fire, **still pause a
 
 ## Round detection
 
-Before sub-phase 1, determine which round number this invocation is:
+Before sub-phase 1, determine which round number this invocation is. Rounds are tracked **per PR**: rounds for the main PR live in `feedback/round-NN/`; rounds for a sub-PR live in `feedback/sub-<N>/round-NN/` (so sub-PR rounds and parent-PR rounds never share a numbering).
 
-- Read `.dev-assistant/issues/<issue-id>/feedback/` (create it if missing — `mkdir -p`).
-- List existing `round-NN/` folders. The next round is `NN = max(existing) + 1`, or `01` if none exist.
-- Create `feedback/round-<NN>/` and `feedback/round-<NN>/clusters/`.
+- Read the round base dir — `.dev-assistant/issues/<issue-id>/feedback/` for the main PR, `feedback/sub-<N>/` for a sub-PR target (create it if missing — `mkdir -p`).
+- List existing `round-NN/` folders under that base. The next round is `NN = max(existing) + 1`, or `01` if none exist.
+- Create `<base>/round-<NN>/` and `<base>/round-<NN>/clusters/`.
 - Determine the `since` timestamp for pulling new comments:
   - If this is round 01: `since = null` (pull all comments).
-  - Otherwise: read `feedback/round-<NN-1>/report.md` frontmatter for `pulled_at` and use that.
+  - Otherwise: read `<base>/round-<NN-1>/report.md` frontmatter for `pulled_at` and use that.
 
 Surface to the user: *"Round NN — pulling comments since `<since>` (or "from PR open" if round 01)."*
 

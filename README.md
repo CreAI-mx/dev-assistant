@@ -30,7 +30,9 @@ Then in Claude Code, walk the phases:
 /dev-gather PROJ-123     # collect context → gathering/objectives.md
 /dev-plan PROJ-123       # decompose into subtasks → plan/plan.md
 /dev-execute PROJ-123    # implement one subtask per invocation; wrap-up opens the PR
+                         # (in sub-branches mode, each subtask opens its own sub-PR)
 /dev-feedback PROJ-123   # one round of PR review iteration per invocation
+                         # (add a subtask number to target that subtask's sub-PR)
 /dev-evaluate PROJ-123   # retro + lessons + close out externally
 ```
 
@@ -46,8 +48,8 @@ Five phase commands, each producing artifacts under `.dev-assistant/issues/<id>/
 |---|---|---|
 | Gather | `/dev-gather` | `gathering/report.md`, `gathering/objectives.md` |
 | Plan | `/dev-plan` | `plan/plan.md`, `plan/report.md` |
-| Execute | `/dev-execute` | Code commits, PR (one subtask per invocation, then wrap-up) |
-| Feedback | `/dev-feedback` | One round of PR review iteration per invocation |
+| Execute | `/dev-execute` | Code commits, PR (one subtask per invocation, then wrap-up). Big issues can opt into **sub-branches mode** at plan time: one sub-branch + sub-PR per subtask, parent PR at wrap-up |
+| Feedback | `/dev-feedback` | One round of PR review iteration per invocation (main PR or a subtask's sub-PR) |
 | Evaluate | `/dev-evaluate` | Retro + lessons + close-out + optional non-destructive archive |
 
 Customizable per repo via `dev-assistant strategies customize <name>` for branching, PR template, comment style, etc. Repo-owned rules documents are pointed at via `.dev-assistant/repo-context.md` and re-read on every phase invocation so the source of truth stays in the target repo.

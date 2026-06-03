@@ -39,13 +39,22 @@ The above is the target repo's own guideline documents (workflows, naming, lifec
 
 ## Decomposition model
 
-A subtask is a **logical unit of work that produces 1–3 commits**. The dependency graph operates at subtask level. The goal is fewer subtasks (and therefore fewer PRs) while letting each subtask span multiple commits when the work naturally clusters that way.
+A subtask is a **logical unit of work that produces 1–3 commits**. The dependency graph operates at subtask level. The goal is fewer subtasks while letting each subtask span multiple commits when the work naturally clusters that way.
 
 - **Subtasks per issue: 2–5**, biased toward the low end.
 - **Commits per subtask: 1–3**, hard cap at 3.
 - **Total commits per PR: aim 4–8**, hard backstop at 10.
 
 When a subtask would need 4 commits, that's a signal it should be two subtasks. When a subtask is "really just one commit," set `commits: 1`.
+
+### Branching mode
+
+Every issue is executed in one of two branching modes. The choice is made in sub-stage 4 and recorded as `branching_mode` in `plan.md` frontmatter:
+
+- **`single-branch`** (default) — one `feat/<TICKET>-<slug>` branch for the whole issue. Subtasks land as commits on it; one PR opens at wrap-up. The per-PR commit backstop (≤10) applies to the issue total.
+- **`sub-branches`** — each subtask gets its own `feat/<TICKET>-<slug>-sub-N` branch off the parent feature branch, with its own sub-PR (target: the parent feature branch) opened at subtask completion. Wrap-up opens the parent PR (feat → version) once all sub-PRs are merged. The per-PR backstop applies per sub-PR (trivially satisfied at ≤3 commits each); the issue-level commit total may exceed 10.
+
+Recommend `sub-branches` when the total commit estimate pushes past the 8–10 band, when subtasks are independent enough to review in isolation, or when the user wants work landing incrementally instead of one big PR at the end. Otherwise default to `single-branch`. The user always decides.
 
 ## What this phase produces
 
@@ -138,10 +147,11 @@ Now propose the full picture:
 
 - **Dependency graph**: for each subtask, set `depends_on: [<ids>]`. Default linear (subtask N depends on N-1). Mark any safe parallels (`depends_on: []` when truly independent) — useful metadata for future fan-out, even though `/dev-execute` is per-subtask serial. Dependencies are between subtasks, not between commits within a subtask.
 - **Branch slug**: `feat/$ARGUMENTS-<short-slug>` where `<short-slug>` is 2–4 kebab-case words derived from the issue purpose. Keep it short and specific.
+- **Branching mode**: propose `single-branch` or `sub-branches` per the criteria in the decomposition model, with a one-line rationale (e.g. "total estimate is 9 commits and subtasks 02–04 are independent — recommend `sub-branches`"). The user decides; record the outcome.
 - **Target version branch**: record as `latest at execute time` — do not resolve here. `/dev-execute` will `git fetch origin` and pick the highest `version/x.y.z` on the remote at first-subtask time.
 - **Coverage map**: a table showing which subtasks cover which objectives. Mechanical check — confirm every specific objective is covered.
 
-Present all four to the user.
+Present all five to the user.
 
 **Pause for user input.** They may redirect on order ("3 must come before 2"), slug ("call it `oauth-flow`, not `add-oauth-flow`"), or coverage gaps.
 
@@ -156,7 +166,7 @@ The final rigor pass + write.
 - Dependency graph is acyclic and well-formed
 - Subtask count is in the 2–5 band
 - No subtask has more than 3 commits (`commits` field ≤3)
-- Total commits across all subtasks ≤10 (backstop against giant PRs)
+- Total commits across all subtasks ≤10 (backstop against giant PRs) — **waived in `sub-branches` mode** (each sub-PR is ≤3 commits by construction); a total above 10 in `single-branch` mode is instead a prompt to switch to `sub-branches` or split the issue
 - Each commit's `type` is in the branching strategy's allowed types
 - Commit types match branch purpose (on a `feat/` branch, no `fix` unless the issue is bug-driven)
 - Branch slug matches the strategy's pattern (`feat/<TICKET>-<slug>`)
@@ -220,6 +230,7 @@ issue: $ARGUMENTS
 phase: plan
 status: complete
 proposed_branch: feat/$ARGUMENTS-<slug>
+branching_mode: <single-branch | sub-branches>
 target_version: latest
 total_subtasks: <n>
 total_commits: <sum of commits across subtasks>
@@ -229,11 +240,12 @@ total_commits: <sum of commits across subtasks>
 
 See [report.md](./report.md) for the planning process, alternatives, and viability discussion.
 
-## Branch info (proposed — `/dev-execute` creates the branch)
+## Branch info (proposed — `/dev-execute` creates the branches)
 
 - **Feature branch**: `feat/$ARGUMENTS-<slug>`
+- **Branching mode**: `single-branch` (subtasks land as commits on the feature branch; one PR at wrap-up) or `sub-branches` (each subtask gets `feat/$ARGUMENTS-<slug>-sub-N` off the feature branch with its own sub-PR at completion; parent PR at wrap-up)
 - **Target version branch**: latest `version/x.y.z` on `origin` (resolved by `/dev-execute` via `git fetch origin` at first-subtask time)
-- **GitHub issue**: not yet created — `/dev-execute` creates it on the first subtask
+- **GitHub issue**: not yet created — `/dev-execute` creates it on the first subtask. One GH issue per Jira parent ticket, regardless of branching mode (Jira subtasks never get their own GH issue)
 
 ## Coverage map
 
