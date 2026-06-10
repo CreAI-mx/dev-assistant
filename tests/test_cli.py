@@ -74,7 +74,7 @@ def test_issue_create_produces_phase_folders_and_metadata(
 
     issue_dir = chdir_tmp / WORKSPACE_DIRNAME / "issues" / "FOO-1"
     assert issue_dir.is_dir()
-    for phase in ("gathering", "plan", "execution", "evaluation"):
+    for phase in ("refinement", "gathering", "plan", "execution", "evaluation"):
         assert (issue_dir / phase).is_dir(), f"missing phase folder: {phase}"
 
     issue_md = (issue_dir / "issue.md").read_text()

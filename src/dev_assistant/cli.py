@@ -11,7 +11,7 @@ import typer
 
 WORKSPACE_DIRNAME = ".dev-assistant"
 WORKSPACE_SUBFOLDERS = ("issues", "reviews", "strategies", "lessons")
-PHASE_SUBFOLDERS = ("gathering", "plan", "execution", "evaluation")
+PHASE_SUBFOLDERS = ("refinement", "gathering", "plan", "execution", "evaluation")
 
 app = typer.Typer(
     name="dev-assistant",

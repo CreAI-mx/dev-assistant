@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is in alpha (`0.x`), breaking changes may land in any minor version.
 
+## [0.4.0] - 2026-06-10
+
+Adds the refine phase (phase 0): the previously-unmodeled step where a thin ticket is thought through and rewritten before any gathering happens.
+
+### Added
+
+- **`/dev-refine <issue-id>`** — optional phase 0 for tickets that arrive without enough detail. Five sub-stages: **load** (fetch the ticket from Jira via the Atlassian MCP, paste fallback; scaffolds the issue workspace if it doesn't exist — refine is usually the first phase to touch a ticket), **exploration** (an intense open conversation: the real ask vs. the ticket's text, feasibility grounded in actual repo reads, 2–4 genuinely different candidate directions with trade-offs, scope edges, constraints), **narrowing** (chosen direction, alternatives set aside with honest reasons, surviving open questions — "split this ticket" and "don't do it" are valid outcomes), **rewrite proposal** (new title + description side-by-side with the originals, iterated to explicit approval), **apply + report** (updates the Jira title/description — the phase's only external write, gated on approval and skipped for experimental issues; syncs local `issue.md`; writes `refinement/report.md`). The GH issue is untouched — it is still created at `/dev-execute`. Model: Opus.
+- `refinement/report.md` — extensive by design: original ticket verbatim, the exploration narrative, alternatives considered, decision rationale, refined ticket text, and open questions handed to gather. The only record of the refinement conversation.
+- `/dev-gather` now lists the refinement report as a source candidate (proposed first when present), treats its decisions as settled unless reopened, seeds open questions from it, and skips Direct-input questions it already answers.
+- `issue create` now scaffolds a `refinement/` phase folder; `issue show` reports its progress. Workspaces created before 0.4.0 show `refinement: [missing folder]`, which is harmless — `/dev-refine` is optional and writes create the folder on demand.
+
+### Changed
+
+- DESIGN.md: the lifecycle is now "five stages plus phase 0"; the deferred `/dev-issue-new` idea is superseded by `/dev-refine` sub-stage 1 (fetch from Jira → confirm → scaffold).
+
 ## [0.3.0] - 2026-06-03
 
 Adds the reviewer side: reviewing *someone else's* PR, the mirror image of `/dev-feedback`.

@@ -2,7 +2,7 @@
 
 ## Vision
 
-A developer assistant integrated with Claude Code. Standardizes how I work through development tasks across the five stages of any meaningful piece of work: gather information, plan, execute, get feedback during execution, and evaluate.
+A developer assistant integrated with Claude Code. Standardizes how I work through development tasks across the five stages of any meaningful piece of work: gather information, plan, execute, get feedback during execution, and evaluate — plus an optional phase 0, refine, for tickets that arrive too thin to gather against.
 
 ## Architecture (slash-commands-first)
 
@@ -30,14 +30,15 @@ Three layers, top to bottom:
 └───────────────────────────────────────────────────────────────┘
 ```
 
-Phases (gather / plan / execute / feedback / evaluate) are *reasoning* work — they live in slash commands. The CLI does *not* have one subcommand per phase. It has one subcommand per deterministic operation.
+Phases (refine / gather / plan / execute / feedback / evaluate) are *reasoning* work — they live in slash commands. The CLI does *not* have one subcommand per phase. It has one subcommand per deterministic operation.
 
 ## Status
 
 Experimental. Single-user. Local-only. No distribution planned yet.
 
-## The Five Stages
+## The Five Stages (plus phase 0)
 
+0. **Refine** *(optional)* — turn a thin ticket into a well-specified one *before* gathering. An intense exploration conversation: the real ask, feasibility against the actual repo, alternative approaches/algorithms/ideas, scope edges. Converges on a chosen direction, rewrites the Jira title + description (applied only after approval — the one external side effect), and records the whole exploration in `refinement/report.md`, which gather consumes as a source. Well-specified tickets skip this phase entirely.
 1. **Gather information** — pull context from meetings, repo state, Slack, conversations into one structured document.
 2. **Plan** — produce a main issue with subtasks (linear, parallel, or delegated).
 3. **Execute** — work through subtasks, following the repo's coding standards. Creates the GitHub issue at this point (distinct from the workspace-issue that exists locally).
@@ -104,13 +105,14 @@ Configuration:
 - At init: `dev-assistant init --with-context <path>...` seeds the pointer file with one or more existing rules documents.
 - Later: `dev-assistant repo-context add <path> [--note "..."]`, `dev-assistant repo-context remove <path>`, `dev-assistant repo-context list`.
 
-Repo context is consumed by all five phase slash commands (`/dev-gather`, `/dev-plan`, `/dev-execute`, `/dev-feedback`, `/dev-evaluate`) and by `/dev-review`.
+Repo context is consumed by all phase slash commands (`/dev-refine`, `/dev-gather`, `/dev-plan`, `/dev-execute`, `/dev-feedback`, `/dev-evaluate`) and by `/dev-review`.
 
 After `dev-assistant issue create --id PROJ-123 --title "..."`:
 
 ```
 .dev-assistant/issues/PROJ-123/
 ├── issue.md            # frontmatter metadata + description
+├── refinement/         # refine phase output (report.md) — empty if the ticket skipped phase 0
 ├── gathering/          # gather phase output (objectives.md)
 ├── plan/               # plan phase output
 ├── execution/          # execution notes / decisions
@@ -177,6 +179,8 @@ The CLI is the deterministic substrate. It does not implement phases (those are 
 
 ### Implemented
 
+- `/dev-refine <issue-id>` — optional phase 0, run when a ticket arrives too thin to gather against. Five announced sub-stages: **1 load** (fetch the ticket from Jira via Atlassian MCP, paste fallback; scaffold the issue workspace via `issue create` if it doesn't exist — refine is usually the first phase to touch a ticket), **2 exploration** (the heart: an intense conversation over the real ask, feasibility grounded in repo reads, 2–4 genuinely different candidate directions with trade-offs, scope edges, constraints — Claude is expected to contribute ideas, not just transcribe), **3 narrowing** (chosen direction + alternatives set aside with honest reasons + surviving open questions; "split this ticket" or "don't do it" are valid outcomes), **4 rewrite proposal** (new title + description side-by-side with the originals, iterated until explicit approval), **5 apply + report** (the ONLY external write of the phase: update Jira title/description after approval — skipped for experimental issues, manual-paste fallback without MCP; then sync local `issue.md`; then write `refinement/report.md` — deliberately allowed to be extensive, it is the only record of the exploration). The GH issue is untouched (still created at `/dev-execute`). `/dev-gather` consumes the report as its first source. Model: Opus.
+
 - `/dev-gather <issue-id>` — walks the gather phase in five announced sub-stages (source inventory → information collection per source → process objectives confirmation → draft issue objectives → validation and write). Produces **two artifacts**: a thinking artifact (`gathering/report.md`) preserving full source content + analysis, and a decision artifact (`gathering/objectives.md`) with distilled objectives that later phases consume.
 
 - `/dev-plan <issue-id>` — walks the plan phase in five announced sub-stages (context load → decomposition proposal → subtask elaboration → sequencing and branch info → viability check and write). Produces **two artifacts**: a thinking artifact (`plan/report.md`) covering decomposition approach, sequencing rationale, alternatives considered, viability outcomes, and risks; and a decision artifact (`plan/plan.md`) with branch info, branching mode (`single-branch` default — one feat branch, one PR at wrap-up — or `sub-branches` — one `feat/<TICKET>-<slug>-sub-N` branch + sub-PR per subtask, parent PR at wrap-up; chosen in sub-stage 4, recommended when the commit estimate runs past the 8–10 band), coverage map, dependency graph, and full subtask specs inline. Pure planning — no side effects (no GitHub issue, no branch, no commits, no PR). Model: Opus.
@@ -209,13 +213,13 @@ Two files in `.dev-assistant/issues/<id>/gathering/`:
 
 Both use checkbox-style for objectives so later phases can flip items as work proceeds.
 
-Sources of information feeding the gather phase: JIRA (via Atlassian MCP when available), the repo (via Read/Grep/Glob), meeting notes (pasted by user), direct conversation. The slash command asks which subset to consult at the start of every run.
+Sources of information feeding the gather phase: the refinement report (`refinement/report.md` from `/dev-refine`, proposed as the first source when present — its decisions are treated as settled unless the user reopens them), JIRA (via Atlassian MCP when available), the repo (via Read/Grep/Glob), meeting notes (pasted by user), direct conversation. The slash command asks which subset to consult at the start of every run.
 
 **Direct input** sub-stage is guided by five fixed questions (problem-in-own-words → background-not-in-ticket → other-people-with-context → undocumented-constraints → most-uncertain-thing) asked one at a time. The slash command explicitly instructs Claude to **stop and wait for the user's response** in this sub-stage and the other interactive ones, including under autonomous / auto-accept modes — earlier runs were skipping interactive prompts in those modes.
 
 ### Next up
 
-All five phase slash commands are implemented, plus the reviewer-side `/dev-review` (not a lifecycle phase — it stands alone, since the user is the reviewer, not the author). Remaining work is in CLI helpers and quality-of-life additions — see "Deferred / Next Up" below.
+All lifecycle phase slash commands are implemented (`/dev-refine` through `/dev-evaluate`), plus the reviewer-side `/dev-review` (not a lifecycle phase — it stands alone, since the user is the reviewer, not the author). Remaining work is in CLI helpers and quality-of-life additions — see "Deferred / Next Up" below.
 
 ## CLI Conventions
 
@@ -228,11 +232,11 @@ All five phase slash commands are implemented, plus the reviewer-side `/dev-revi
 
 MCP servers are only accessible inside Claude Code, not from a raw terminal. So integrations like Atlassian/Jira lookup live in the **slash command** layer, not in the CLI itself.
 
-For example, future `/dev-issue-new <issue-id>` will:
+For example, `/dev-refine <issue-id>` (sub-stage 1) does exactly this:
 
 1. Check: is Atlassian MCP available?
 2. If yes → fetch issue from Jira → confirm with user → invoke `!dev-assistant issue create --id <id> --title <fetched-title>`.
-3. If no → ask "set up MCP?". On yes → walk setup → retry. On no → fall back to manual entry, then invoke the CLI.
+3. If no → fall back to the user pasting the ticket, then invoke the CLI.
 
 The CLI itself stays dumb — it just scaffolds folders with whatever the slash command hands it.
 
@@ -254,7 +258,7 @@ No PyPI distribution. No tests / lint / CI yet. The project itself is a normal g
 
 ## Deferred / Next Up
 
-- Atlassian / Jira MCP path: `/dev-issue-new` that fetches from Jira before scaffolding the local issue workspace.
+- ~~Atlassian / Jira MCP path: `/dev-issue-new` that fetches from Jira before scaffolding the local issue workspace.~~ Superseded by `/dev-refine` (0.4.0), which fetches from Jira and scaffolds the workspace as its sub-stage 1.
 - State transitions: `dev-assistant phase complete`, `lesson add` (would be invoked by `/dev-evaluate` once they exist).
 - Promotion path: repo-specific lessons → global zone-1 updates. Lessons already carry a `promotion_candidate` flag; the promotion command itself is still missing.
 - Parallel subtask execution via subagent fan-out (currently `/dev-execute` is per-subtask serial).

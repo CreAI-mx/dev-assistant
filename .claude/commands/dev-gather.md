@@ -52,6 +52,7 @@ Announce which sub-stage you're entering before each one so the user knows where
 
 Ask the user which sources of information are available for this issue. The candidates are:
 
+- **Refinement report** — `refinement/report.md` written by `/dev-refine`, if the phase progress above shows one. When present, propose it as the *first* source by default — it records the exploration that shaped the ticket.
 - **JIRA** — fetch issue details via the Atlassian MCP if you have access to those tools
 - **Repo** — read files in the current working directory using Read, Grep, Glob
 - **Meeting notes** — the user pastes them into the chat
@@ -65,7 +66,9 @@ Go through each source confirmed in sub-stage 1, in turn. Do **one source at a t
 
 **Important: retain detail, don't compress too early.** You'll write a full report at the end, not just bullets. Keep the actual content (quoted comments, code snippets, paraphrased meeting points) — you'll need it for `report.md`. Summary-of-summary now means thin report later.
 
-- **JIRA**: if available, look up the issue (`$ARGUMENTS` is likely the Jira key). Pull title, description, status, comments, linked issues. Keep the actual content of relevant fields, not just one-line summaries. Confirm with the user that this is the right ticket and flag anything missing.
+- **Refinement report**: read `.dev-assistant/issues/$ARGUMENTS/refinement/report.md` in full. It carries the chosen direction, the alternatives that were set aside (and why), feasibility findings, and open questions — treat its decisions as settled unless the user reopens them, and seed your open-questions list from its "Open questions for gathering" section. Many of the Direct input guiding questions below will already be answered here; skip or adapt those rather than re-asking.
+
+- **JIRA**: if available, look up the issue (`$ARGUMENTS` is likely the Jira key). Pull title, description, status, comments, linked issues. Keep the actual content of relevant fields, not just one-line summaries. Confirm with the user that this is the right ticket and flag anything missing. If a refinement report exists, the ticket text was already rewritten by `/dev-refine` — focus on what's *new* since then (comments, status changes, links).
 
 - **Repo**: ask the user which files/areas are relevant, or grep for keywords from the issue title. Read the relevant files. Keep paths + a real summary of what each contains relative to this issue — not just "I read X." Note any existing patterns the issue touches.
 
@@ -130,6 +133,11 @@ sources: [list of sources actually consulted]
 One paragraph: what we set out to understand, what we learned overall, the main insight or tension that emerged.
 
 ## Sources
+
+### Refinement report
+- Chosen direction and decision rationale (from /dev-refine)
+- Alternatives set aside, with reasons
+- Open questions inherited from refinement
 
 ### JIRA
 - Ticket title, description, status (quote the actual content)

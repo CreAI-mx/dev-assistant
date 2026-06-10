@@ -7,7 +7,7 @@
 > 🚧 **Alpha — APIs, CLI flags, and slash-command behavior may change without notice.**
 > Single-user origin, now opening up to invited collaborators for feedback. Not for production use.
 
-An AI-powered developer assistant. Standardizes how dev work moves through five stages: **gather → plan → execute → feedback → evaluate**. Two layers: a Python CLI for deterministic helpers, and Claude Code slash commands that drive the reasoning per phase.
+An AI-powered developer assistant. Standardizes how dev work moves through five stages: **gather → plan → execute → feedback → evaluate**, with an optional **refine** phase 0 for tickets that arrive too thin. Two layers: a Python CLI for deterministic helpers, and Claude Code slash commands that drive the reasoning per phase.
 
 See [DESIGN.md](DESIGN.md) for the architecture and rationale, and [IDEAS.md](IDEAS.md) for the deferred / next-up list.
 
@@ -27,6 +27,8 @@ dev-assistant issue create --id PROJ-123 --title "Refactor payments"
 Then in Claude Code, walk the phases:
 
 ```
+/dev-refine PROJ-123     # optional phase 0: think a thin ticket through (feasibility,
+                         # alternatives), rewrite it in Jira → refinement/report.md
 /dev-gather PROJ-123     # collect context → gathering/objectives.md
 /dev-plan PROJ-123       # decompose into subtasks → plan/plan.md
 /dev-execute PROJ-123    # implement one subtask per invocation; wrap-up opens the PR
@@ -42,10 +44,11 @@ For experimental / sandbox work, add `--experimental` at `issue create` time to 
 
 ## How it works
 
-Five phase commands, each producing artifacts under `.dev-assistant/issues/<id>/`:
+Six phase commands (refine is optional), each producing artifacts under `.dev-assistant/issues/<id>/`:
 
 | Phase | Slash command | Primary outputs |
 |---|---|---|
+| Refine *(optional)* | `/dev-refine` | Rewritten Jira title + description (applied only after approval), `refinement/report.md` recording the feasibility/alternatives exploration |
 | Gather | `/dev-gather` | `gathering/report.md`, `gathering/objectives.md` |
 | Plan | `/dev-plan` | `plan/plan.md`, `plan/report.md` |
 | Execute | `/dev-execute` | Code commits, PR (one subtask per invocation, then wrap-up). Big issues can opt into **sub-branches mode** at plan time: one sub-branch + sub-PR per subtask, parent PR at wrap-up |
