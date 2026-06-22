@@ -1011,5 +1011,51 @@ def repo_context_remove(
     _ok(f"Removed '{path}' from repo-context.md")
 
 
+@app.command("tui")
+def tui(
+    path: Annotated[
+        Path | None,
+        typer.Option(
+            "--path",
+            help="Directory whose .dev-assistant/ workspace to open. "
+            "Defaults to the current directory (searching parents).",
+        ),
+    ] = None,
+) -> None:
+    """Launch the read-only terminal dashboard for the workspace.
+
+    Browse issues, phase progress, reviews and lessons, and read any artifact
+    rendered as markdown — without leaving the terminal. Requires the optional
+    `tui` extra: `pip install 'dev-assistant[tui]'`.
+    """
+    from dev_assistant.tui.model import find_workspace
+
+    if path is not None:
+        root = (path / WORKSPACE_DIRNAME) if path.name != WORKSPACE_DIRNAME else path
+        if not root.is_dir():
+            _err(f"{WORKSPACE_DIRNAME}/ not found under {path}.")
+            raise typer.Exit(code=1)
+    else:
+        root = find_workspace()
+        if root is None:
+            _err(
+                f"No {WORKSPACE_DIRNAME}/ found here or in any parent directory. "
+                f"Run `dev-assistant init` first, or pass --path."
+            )
+            raise typer.Exit(code=1)
+
+    from dev_assistant.tui import run as run_tui
+
+    try:
+        run_tui(root)
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        _err(
+            "The dashboard requires the 'tui' extra. Install it with: "
+            "pip install 'dev-assistant[tui]'"
+        )
+        _err(f"(import error: {exc})")
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
