@@ -1,174 +1,397 @@
-"""Pure markdown renderers for the TUI detail pane.
+"""Rich renderables for the TUI detail pane.
 
-Each function turns a model object into a markdown string. Kept separate from
-the Textual app so the formatting is unit-testable without a terminal.
+Structured views (overview, issue timeline, review) are built as Rich
+renderables so phase state can be colored and graphs drawn. Raw artifact files
+are rendered separately as markdown by the app. Kept import-light and mostly
+pure so the formatting helpers stay unit-testable.
 """
 from __future__ import annotations
 
 from datetime import datetime
 
-from .model import PHASE_ORDER, Issue, Review, Workspace
+from rich.console import Group, RenderableType
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
+
+from . import theme
+from .gitinfo import GitInfo
+from .model import Issue, PhaseStatus, Review, Workspace, humanize_age
+
+# --- small primitives ---------------------------------------------------------
 
 
 def progress_bar(completed: int, total: int) -> str:
-    filled = "█" * completed
-    empty = "░" * max(0, total - completed)
-    return f"{filled}{empty}"
+    """Plain-string block bar for tree labels."""
+    completed = max(0, min(completed, total))
+    return theme.BAR_FULL * completed + "·" * (total - completed)
 
 
-def _verdict_mark(verdict: str) -> str:
+def hbar(value: float, maxval: float, width: int = 18) -> Text:
+    """Horizontal bar with sub-cell (eighths) resolution."""
+    if maxval <= 0:
+        return Text(theme.BAR_EMPTY * width, style=theme.STYLE_DIM)
+    filled = (value / maxval) * width
+    full = int(filled)
+    rem = filled - full
+    eighth = theme.BAR_PARTIALS[round(rem * 8)] if full < width else ""
+    bar = theme.BAR_FULL * full + eighth
+    bar = bar.ljust(width, theme.BAR_EMPTY)
+    return Text(bar, style=theme.STYLE_ACCENT)
+
+
+def _verdict_text(verdict: str) -> Text:
     v = verdict.lower()
     if "approve" in v:
-        return "✓"
+        return Text(f"{theme.ICON_OK} {verdict}", style=theme.STYLE_OK)
     if "request" in v or "block" in v or "change" in v:
-        return "✗"
-    if "comment" in v:
-        return "💬"
-    return "·"
+        return Text(f"{theme.ICON_FAIL} {verdict}", style=theme.STYLE_FAIL)
+    return Text(f"{theme.ICON_NEUTRAL} {verdict}", style=theme.STYLE_DIM)
 
 
-def render_overview(ws: Workspace, *, ref: datetime | None = None) -> str:
+def _h(text: str) -> Text:
+    return Text(text, style="bold")
+
+
+# --- overview -----------------------------------------------------------------
+
+
+def render_overview(
+    ws: Workspace, *, git: GitInfo | None = None, ref: datetime | None = None
+) -> RenderableType:
     active = ws.active_issues
-    archived = ws.archived_issues
     open_reviews = [r for r in ws.reviews if r.status != "closed"]
 
-    lines: list[str] = []
-    lines.append(f"# {ws.repo_name} — dev-assistant workspace")
-    lines.append("")
-    lines.append(f"`{ws.root}`")
-    lines.append("")
+    parts: list[RenderableType] = []
+    title = Text()
+    title.append(ws.repo_name, style="bold cyan")
+    title.append("  dev-assistant workspace", style="dim")
+    parts.append(title)
+    parts.append(Text(str(ws.root), style="dim"))
+    parts.append(Text())
 
-    lines.append("## Rollups")
-    lines.append("")
-    lines.append("| metric | count |")
-    lines.append("|---|---|")
-    lines.append(f"| Active issues | {len(active)} |")
-    lines.append(f"| Archived issues | {len(archived)} |")
-    lines.append(f"| Reviews (open) | {len(ws.reviews)} ({len(open_reviews)}) |")
-    lines.append(f"| Lessons archived | {len(ws.lessons)} |")
-    lines.append(f"| Repo context | {'yes' if ws.has_repo_context else 'no'} |")
-    custom = ", ".join(ws.custom_strategies) if ws.custom_strategies else "none"
-    lines.append(f"| Custom strategies | {custom} |")
-    lines.append("")
+    # Rollups.
+    roll = Table.grid(padding=(0, 2))
+    roll.add_column(justify="right", style="bold")
+    roll.add_column()
+    roll.add_row(str(len(active)), Text("active issues"))
+    roll.add_row(str(len(ws.archived_issues)), Text("archived", style="dim"))
+    roll.add_row(str(len(open_reviews)), Text("open reviews"))
+    roll.add_row(str(len(ws.lessons)), Text("lessons"))
+    git_line = Text("—", style="dim")
+    if git and git.is_repo:
+        git_line = Text(f"{theme.ICON_BRANCH} {git.current_branch or '?'}", style="cyan")
+        if git.clean:
+            git_line.append("  clean", style="green")
+        else:
+            git_line.append(
+                f"  {git.dirty_count} changed, {git.untracked_count} untracked",
+                style="yellow",
+            )
+    roll.add_row("", git_line)
+    parts.append(roll)
+    parts.append(Text())
 
+    # Phase distribution bar chart.
+    parts.append(_h("Pipeline distribution (active issues)"))
     dist = ws.phase_distribution
-    lines.append("## Phase distribution (active issues)")
-    lines.append("")
-    lines.append("| phase | issues |")
-    lines.append("|---|---|")
-    for name in PHASE_ORDER:
-        if dist.get(name):
-            lines.append(f"| {name} | {dist[name]} |")
-    if dist.get("complete"):
-        lines.append(f"| ✅ complete | {dist['complete']} |")
-    if dist.get("empty"):
-        lines.append(f"| (not started) | {dist['empty']} |")
+    rows = [(name, dist.get(name, 0)) for name in (
+        "refinement", "gathering", "plan", "execution", "feedback", "evaluation")]
+    rows.append(("complete", dist.get("complete", 0)))
+    maxval = max((c for _, c in rows), default=0) or 1
+    chart = Table.grid(padding=(0, 1))
+    chart.add_column(justify="right", style="dim", width=10)
+    chart.add_column()
+    chart.add_column(justify="right")
+    for name, count in rows:
+        if count == 0:
+            continue
+        chart.add_row(name, hbar(count, maxval, 22), str(count))
     if not active:
-        lines.append("| _no active issues_ | |")
-    lines.append("")
+        chart.add_row("", Text("no active issues", style="dim"), "")
+    parts.append(chart)
+    parts.append(Text())
 
-    lines.append("## Active issues")
-    lines.append("")
+    # Active issues table.
+    parts.append(_h("Active issues"))
     if active:
-        lines.append("| id | progress | current | age | in phase |")
-        lines.append("|---|---|---|---|---|")
+        tbl = Table(expand=False, pad_edge=False, box=None, padding=(0, 2))
+        tbl.add_column("id", style="bold cyan")
+        tbl.add_column("progress")
+        tbl.add_column("phase")
+        tbl.add_column("age", justify="right", style="dim")
+        tbl.add_column("in phase", justify="right", style="dim")
         for i in active:
-            cur = "✅ done" if i.is_complete else (
-                i.current_phase.label if i.current_phase else "—"
+            bar = Text(progress_bar(i.completed_count, i.total_phases), style="green")
+            bar.append(f" {i.completed_count}/{i.total_phases}", style="dim")
+            cur = (
+                Text("complete", style="green")
+                if i.is_complete
+                else Text(
+                    i.current_phase.label if i.current_phase else "—",
+                    style=theme.STYLE_ACTIVE,
+                )
             )
-            flag = " ⚗️" if i.experimental else ""
-            bar = progress_bar(i.completed_count, i.total_phases)
-            lines.append(
-                f"| **{i.id}**{flag} | `{bar}` {i.completed_count}/{i.total_phases} "
-                f"| {cur} | {i.age(ref)} | {i.time_in_phase(ref)} |"
-            )
+            idtxt = Text(i.id)
+            if i.experimental:
+                idtxt.append(" exp", style="yellow")
+            tbl.add_row(idtxt, bar, cur, i.age(ref), i.time_in_phase(ref))
+        parts.append(tbl)
     else:
-        lines.append("_None. Create one with_ `dev-assistant issue create`.")
-    lines.append("")
+        parts.append(Text("None. Create one with `dev-assistant issue create`.", style="dim"))
+    parts.append(Text())
 
+    # Reviews.
     if ws.reviews:
-        lines.append("## Reviews")
-        lines.append("")
-        lines.append("| pr | verdict | rounds | comments | age |")
-        lines.append("|---|---|---|---|---|")
+        parts.append(_h("Reviews"))
+        rtbl = Table(expand=False, pad_edge=False, box=None, padding=(0, 2))
+        rtbl.add_column("pr", style="bold magenta")
+        rtbl.add_column("verdict")
+        rtbl.add_column("rounds", justify="right")
+        rtbl.add_column("comments", justify="right")
+        rtbl.add_column("age", justify="right", style="dim")
         for r in ws.reviews:
-            lines.append(
-                f"| pr-{r.pr} | {_verdict_mark(r.last_verdict)} {r.last_verdict} "
-                f"| {r.rounds} | {r.latest_round_comments} | {r.age(ref)} |"
+            rtbl.add_row(
+                f"pr-{r.pr}",
+                _verdict_text(r.last_verdict),
+                str(r.round_count),
+                str(r.total_comments),
+                r.age(ref),
             )
-        lines.append("")
+        parts.append(rtbl)
 
-    return "\n".join(lines)
+    return Group(*parts)
 
 
-def render_issue(issue: Issue, *, ref: datetime | None = None) -> str:
-    lines: list[str] = []
-    lines.append(f"# {issue.id} — {issue.title}")
-    lines.append("")
+# --- issue timeline -----------------------------------------------------------
 
-    badges = [f"`{issue.status}`"]
+
+def _subphase_state(issue: Issue, phase: PhaseStatus, sub_name: str, phase_state: str) -> str:
+    if phase_state == "done":
+        return "done"
+    if phase_state == "pending":
+        return "pending"
+    # active phase — try to locate the active subphase.
+    last = issue.plan.last_feedback_round  # e.g. "sub-2/01"
+    if phase.name == "feedback" and last:
+        active_sub = last.split("/", 1)[0]
+        names = [sp.name for sp in phase.subphases]
+        if sub_name == active_sub:
+            return "active"
+        if active_sub in names and sub_name in names:
+            return "done" if names.index(sub_name) < names.index(active_sub) else "pending"
+    # default: the last-by-name subphase is active.
+    names = [sp.name for sp in phase.subphases]
+    if names and sub_name == names[-1]:
+        return "active"
+    return "done"
+
+
+def _dot(state: str) -> Text:
+    return Text(theme.state_icon(state), style=theme.state_style(state))
+
+
+def render_issue(
+    issue: Issue, *, git: GitInfo | None = None, ref: datetime | None = None
+) -> RenderableType:
+    parts: list[RenderableType] = []
+
+    header = Text()
+    header.append(issue.id, style="bold cyan")
+    header.append(f"  {issue.title}")
+    parts.append(header)
+
+    badges = Text()
+    badges.append(issue.status, style="green" if issue.status == "active" else "dim")
     if issue.experimental:
-        badges.append("⚗️ experimental")
+        badges.append("  ·  ", style="dim")
+        badges.append("experimental", style="yellow")
     if issue.archived:
-        badges.append("📦 archived")
-    badges.append(f"created {issue.age(ref)} ago")
-    lines.append(" · ".join(badges))
-    lines.append("")
+        badges.append("  ·  ", style="dim")
+        badges.append("archived", style="dim")
+    badges.append("  ·  ", style="dim")
+    badges.append(f"created {issue.age(ref)} ago", style="dim")
+    parts.append(badges)
+    parts.append(Text())
 
-    bar = progress_bar(issue.completed_count, issue.total_phases)
-    if issue.is_complete:
-        cur = "all phases complete ✅"
-    elif issue.current_phase:
-        cur = f"current: **{issue.current_phase.name}** ({issue.time_in_phase(ref)} in phase)"
-        if issue.next_phase:
-            cur += f" → next: {issue.next_phase.name}"
+    # Progress summary line.
+    bar = Text(progress_bar(issue.completed_count, issue.total_phases), style="green")
+    bar.append(f"  {issue.completed_count}/{issue.total_phases} phases", style="dim")
+    parts.append(bar)
+    parts.append(Text())
+
+    # Status panel (git + publish), all best-effort.
+    parts.append(_h("Status"))
+    parts.append(_status_table(issue, git))
+    parts.append(Text())
+
+    # Timeline.
+    parts.append(_h("Timeline"))
+    parts.append(_timeline(issue, ref))
+
+    return Group(*parts)
+
+
+def _status_table(issue: Issue, git: GitInfo | None) -> RenderableType:
+    plan = issue.plan
+    t = Table.grid(padding=(0, 2))
+    t.add_column(style="dim", justify="right")
+    t.add_column()
+
+    # Subtasks.
+    exec_phase = next((p for p in issue.phases if p.name == "execution"), None)
+    n_sub = plan.total_subtasks or (exec_phase.subphase_count if exec_phase else 0)
+    t.add_row("subtasks", Text(str(n_sub) if n_sub else "—"))
+
+    # Branch + sub-branches (live git, falling back to recorded plan state).
+    if git and git.is_repo:
+        branch = plan.branch_name
+        exists = git.has_branch(branch)
+        live_subs = git.sub_branches_for(branch)
+        btxt = Text()
+        if branch:
+            btxt.append(f"{theme.ICON_BRANCH} {branch}", style="cyan")
+            btxt.append("  exists" if exists else "  not created", style="green" if exists else "yellow")
+        else:
+            btxt.append("—", style="dim")
+        t.add_row("branch", btxt)
+        if plan.branching_mode == "sub-branches" or live_subs:
+            groups = plan.review_groups
+            sub_txt = Text(f"{len(live_subs)} live", style="cyan")
+            if groups:
+                sub_txt.append(f"  (planned: {', '.join(groups)})", style="dim")
+            t.add_row("sub-branches", sub_txt)
+        repo_txt = Text(f"{theme.ICON_BRANCH} on {git.current_branch}", style="dim")
+        repo_txt.append("  clean" if git.clean else f"  {git.dirty_count} changed",
+                        style="green" if git.clean else "yellow")
+        t.add_row("working tree", repo_txt)
     else:
-        cur = "not started"
-    lines.append("## Progress")
-    lines.append("")
-    lines.append(f"`{bar}` {issue.completed_count}/{issue.total_phases} — {cur}")
-    lines.append("")
+        if plan.branch_name:
+            t.add_row("branch", Text(f"{theme.ICON_BRANCH} {plan.branch_name} (recorded)", style="dim"))
 
-    lines.append("| phase | files | last activity |")
-    lines.append("|---|---|---|")
-    for p in issue.phases:
-        mark = "●" if p.has_content else "○"
-        files = ", ".join(p.files) if p.files else "_empty_"
-        last = _humanize(p.last_modified, ref)
-        lines.append(f"| {mark} {p.name} | {files} | {last} |")
-    lines.append("")
+    if plan.total_commits:
+        t.add_row("commits", Text(str(plan.total_commits)))
 
-    lines.append("## Description")
-    lines.append("")
-    lines.append(issue.description or "_(no description)_")
-    lines.append("")
-    lines.append("---")
-    lines.append("_Expand this issue in the tree to read individual phase files._")
-    return "\n".join(lines)
+    # Publish status.
+    t.add_row("PR", _pr_status(plan))
+    gh = Text(f"{theme.ICON_OK} created", style="green") if plan.gh_issue_created else Text(
+        "not created", style="dim")
+    t.add_row("gh issue", gh)
+
+    return t
 
 
-def render_review(review: Review, *, ref: datetime | None = None) -> str:
-    lines: list[str] = []
-    lines.append(f"# PR #{review.pr} review")
-    lines.append("")
-    badges = [f"`{review.status}`", f"{_verdict_mark(review.last_verdict)} {review.last_verdict}"]
-    lines.append(" · ".join(badges))
-    lines.append("")
+def _pr_status(plan) -> Text:
+    if not plan.pr_url:
+        return Text(f"{theme.ICON_WARN} not opened", style="yellow")
+    state = (plan.pr_state or "").lower()
+    txt = Text()
+    if state == "merged":
+        txt.append(f"{theme.ICON_OK} merged", style="green")
+    elif state == "draft":
+        txt.append(f"{theme.ICON_NEUTRAL} draft (not yet published)", style="yellow")
+    elif state in ("open", "ready"):
+        txt.append(f"{theme.ICON_OK} open", style="green")
+    else:
+        txt.append(state or "open", style="cyan")
+    txt.append(f"  {plan.pr_url}", style="dim")
+    return txt
+
+
+def _timeline(issue: Issue, ref: datetime | None) -> RenderableType:
+    lines: list[Text] = []
+    for phase in issue.phases:
+        state = issue.phase_state(phase)
+        # Skip optional phases that never started.
+        if not phase.has_content and phase.name in ("refinement", "feedback"):
+            continue
+
+        line = Text()
+        line.append_text(_dot(state))
+        line.append(" ")
+        line.append(f"{phase.label:<9}", style=theme.state_style(state))
+        line.append(f"  {state:<8}", style="dim")
+        meta = _phase_meta(phase)
+        if meta:
+            line.append(f"  {meta}", style="dim")
+        if phase.last_modified:
+            line.append(f"   {humanize_age(phase.last_modified, ref=ref)}", style="grey37")
+        lines.append(line)
+
+        # Subphases.
+        for sp in phase.subphases:
+            if not sp.has_content:
+                continue
+            sub_state = _subphase_state(issue, phase, sp.name, state)
+            sline = Text()
+            sline.append(f"{theme.ICON_VBAR} ", style="grey37")
+            sline.append_text(_dot(sub_state))
+            sline.append(" ")
+            sline.append(sp.name, style=theme.state_style(sub_state))
+            detail = []
+            if sp.round_count:
+                detail.append(f"{sp.round_count} round{'s' if sp.round_count != 1 else ''}")
+            if sp.files:
+                detail.append(f"{len(sp.files)} file{'s' if len(sp.files) != 1 else ''}")
+            if detail:
+                sline.append(f"   {' · '.join(detail)}", style="dim")
+            lines.append(sline)
+
+    return Group(*lines) if lines else Text("no phases yet", style="dim")
+
+
+def _phase_meta(phase: PhaseStatus) -> str:
+    if phase.name == "execution" and phase.subphase_count:
+        return f"{phase.subphase_count} subtasks"
+    if phase.name == "feedback" and phase.subphases:
+        return f"{phase.subphase_count} sub-branches · {phase.total_rounds} rounds"
+    if phase.files:
+        n = len(phase.files)
+        return f"{n} file{'s' if n != 1 else ''}"
+    return ""
+
+
+# --- review -------------------------------------------------------------------
+
+
+def render_review(review: Review, *, ref: datetime | None = None) -> RenderableType:
+    parts: list[RenderableType] = []
+    header = Text()
+    header.append(f"PR #{review.pr}", style="bold magenta")
+    if review.title:
+        header.append(f"  {review.title}")
+    parts.append(header)
+
+    sub = Text()
+    sub.append(review.status, style="green" if review.status == "active" else "dim")
+    sub.append("  ·  ", style="dim")
+    sub.append_text(_verdict_text(review.last_verdict))
+    parts.append(sub)
     if review.pr_url:
-        lines.append(f"<{review.pr_url}>")
-        lines.append("")
-    lines.append("| field | value |")
-    lines.append("|---|---|")
-    lines.append(f"| Rounds | {review.rounds} |")
-    lines.append(f"| Drafted comments (latest round) | {review.latest_round_comments} |")
-    lines.append(f"| Last verdict | {review.last_verdict} |")
-    lines.append(f"| Last activity | {_humanize(review.last_modified, ref)} |")
-    lines.append("")
-    lines.append("_Expand this review in the tree to read round artifacts._")
-    return "\n".join(lines)
+        parts.append(Text(review.pr_url, style="dim"))
+    parts.append(Text())
 
+    parts.append(_h("Rounds"))
+    if review.rounds:
+        from .model import _count_comments
 
-def _humanize(dt: datetime | None, ref: datetime | None) -> str:
-    from .model import humanize_age
-
-    return humanize_age(dt, ref=ref)
+        tbl = Table(expand=False, pad_edge=False, box=None, padding=(0, 2))
+        tbl.add_column("round", style="bold")
+        tbl.add_column("comments", justify="right")
+        tbl.add_column("artifacts")
+        tbl.add_column("age", justify="right", style="dim")
+        for r in review.rounds:
+            arts = ", ".join(f for f in r.files if f.endswith(".md")) or "—"
+            tbl.add_row(
+                r.name,
+                str(_count_comments(r.path)),
+                Text(arts, style="dim"),
+                humanize_age(r.last_modified, ref=ref),
+            )
+        parts.append(tbl)
+    else:
+        parts.append(Text("no rounds yet", style="dim"))
+    parts.append(Text())
+    parts.append(Rule(style="grey30"))
+    parts.append(Text("Expand this review in the tree to read round artifacts.", style="dim"))
+    return Group(*parts)

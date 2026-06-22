@@ -3,25 +3,32 @@
 Pure functions and dataclasses that scan a `.dev-assistant/` workspace and
 build an in-memory snapshot. No Textual import here on purpose — this layer is
 fully unit-testable without a terminal, and the app layer renders it.
+
+Phase shapes seen in real workspaces:
+  - refinement / gathering / plan / evaluation : flat files
+  - execution                                  : numbered subtask subfolders, each with files
+  - feedback                                   : sub-N subfolders, each with round-NN subfolders
+The scanner models all of them through Phase -> SubPhase -> Round.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 WORKSPACE_DIRNAME = ".dev-assistant"
 
-# The author-side phase pipeline, in order. `refinement` (phase 0) is optional,
-# so an empty refinement folder does not mean "not started".
-PHASE_ORDER = ("refinement", "gathering", "plan", "execution", "evaluation")
+# Full author-side pipeline, in order. `refinement` (phase 0) and `feedback`
+# are optional, so an empty folder there does not mean "not started".
+PHASE_ORDER = ("refinement", "gathering", "plan", "execution", "feedback", "evaluation")
 
-# Short labels for compact progress rendering.
 PHASE_LABELS = {
     "refinement": "refine",
     "gathering": "gather",
     "plan": "plan",
     "execution": "exec",
+    "feedback": "feedback",
     "evaluation": "eval",
 }
 
@@ -34,8 +41,9 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """Split a markdown document into (frontmatter dict, body).
 
     Handles the simple `key: value` frontmatter dev-assistant writes between a
-    pair of `---` fences. Not a full YAML parser — values are kept as trimmed
-    strings. If there is no leading frontmatter fence, returns ({}, text).
+    pair of `---` fences. Only top-level (non-indented) keys are captured;
+    indented continuation/nested lines (e.g. YAML list items under a key) are
+    skipped rather than mis-parsed. Not a full YAML parser.
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -48,19 +56,21 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             closing = i
             break
         raw = lines[i]
+        if not raw or raw[0] in (" ", "\t", "-"):
+            continue  # nested / list continuation — skip
         if ":" in raw:
             key, _, value = raw.partition(":")
             meta[key.strip()] = value.strip()
     if closing is None:
-        # Malformed (no closing fence) — treat the whole thing as body.
         return {}, text
     body = "\n".join(lines[closing + 1 :]).strip()
     return meta, body
 
 
 def _parse_dt(value: str | None) -> datetime | None:
-    if not value:
+    if not value or value.lower() in ("null", "none", ""):
         return None
+    value = value.replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(value)
     except ValueError:
@@ -70,13 +80,28 @@ def _parse_dt(value: str | None) -> datetime | None:
     return dt
 
 
+def _as_bool(value: str | None) -> bool:
+    return (value or "").strip().lower() == "true"
+
+
+def _clean(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    # Strip a single matching outer quote pair (YAML-quoted scalar).
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
+    if value.lower() in ("null", "none", ""):
+        return None
+    return value
+
+
 def humanize_age(dt: datetime | None, *, ref: datetime | None = None) -> str:
     """Compact human duration since `dt` (e.g. '3d', '5h', '12m', 'just now')."""
     if dt is None:
         return "—"
     ref = ref or _now()
-    delta = ref - dt
-    seconds = int(delta.total_seconds())
+    seconds = int((ref - dt).total_seconds())
     if seconds < 0:
         return "—"
     if seconds < 60:
@@ -96,24 +121,58 @@ def humanize_age(dt: datetime | None, *, ref: datetime | None = None) -> str:
     return f"{days // 30}mo"
 
 
-def _latest_mtime(directory: Path) -> datetime | None:
-    if not directory.is_dir():
+def _tree_latest_mtime(path: Path) -> datetime | None:
+    """Most recent mtime of any file anywhere under `path` (or the file itself)."""
+    if path.is_file():
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    if not path.is_dir():
         return None
     latest: float | None = None
-    for child in directory.iterdir():
+    for child in path.rglob("*"):
         if child.is_file():
             mtime = child.stat().st_mtime
             if latest is None or mtime > latest:
                 latest = mtime
-    if latest is None:
-        return None
-    return datetime.fromtimestamp(latest, tz=timezone.utc)
+    return datetime.fromtimestamp(latest, tz=timezone.utc) if latest else None
+
+
+@dataclass
+class Round:
+    name: str
+    files: list[str]
+    path: Path
+    last_modified: datetime | None
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.files)
+
+
+@dataclass
+class SubPhase:
+    """A subtask folder (execution) or a sub-branch folder (feedback)."""
+
+    name: str
+    files: list[str]
+    rounds: list[Round]
+    path: Path
+    last_modified: datetime | None
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.files) or any(r.has_content for r in self.rounds)
+
+    @property
+    def round_count(self) -> int:
+        return len(self.rounds)
 
 
 @dataclass
 class PhaseStatus:
     name: str
     files: list[str]
+    subphases: list[SubPhase]
+    path: Path
     last_modified: datetime | None
 
     @property
@@ -122,7 +181,52 @@ class PhaseStatus:
 
     @property
     def has_content(self) -> bool:
-        return bool(self.files)
+        return bool(self.files) or any(sp.has_content for sp in self.subphases)
+
+    @property
+    def subphase_count(self) -> int:
+        return len(self.subphases)
+
+    @property
+    def total_rounds(self) -> int:
+        return sum(sp.round_count for sp in self.subphases)
+
+    @property
+    def artifact_count(self) -> int:
+        """Total leaf files across this phase (direct + nested)."""
+        n = len(self.files)
+        for sp in self.subphases:
+            n += len(sp.files)
+            for r in sp.rounds:
+                n += len(r.files)
+        return n
+
+
+@dataclass
+class PlanMeta:
+    """State recorded in plan/plan.md frontmatter — the workspace's own record
+    of branch / PR / external status, written by the slash commands."""
+
+    branching_mode: str | None = None
+    total_subtasks: int | None = None
+    total_commits: int | None = None
+    branch_name: str | None = None
+    branch_created: bool = False
+    target_branch: str | None = None
+    pr_url: str | None = None
+    pr_state: str | None = None
+    gh_issue_created: bool = False
+    review_groups: list[str] = field(default_factory=list)
+    last_feedback_round: str | None = None
+    raw: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def published(self) -> bool:
+        return bool(self.pr_url) and (self.pr_state or "").lower() in (
+            "open",
+            "ready",
+            "merged",
+        )
 
 
 @dataclass
@@ -135,6 +239,7 @@ class Issue:
     description: str
     archived: bool
     phases: list[PhaseStatus]
+    plan: PlanMeta
     path: Path
 
     @property
@@ -147,13 +252,24 @@ class Issue:
 
     @property
     def current_phase(self) -> PhaseStatus | None:
-        """Furthest-along phase that has content (the active one)."""
         active = [p for p in self.phases if p.has_content]
         return active[-1] if active else None
 
+    def phase_state(self, phase: PhaseStatus) -> str:
+        """'done' | 'active' | 'pending' for the timeline."""
+        current = self.current_phase
+        if current is None:
+            return "pending"
+        cur_idx = self.phases.index(current)
+        idx = self.phases.index(phase)
+        if idx < cur_idx:
+            return "done"
+        if idx == cur_idx:
+            return "done" if self.is_complete else "active"
+        return "pending"
+
     @property
     def next_phase(self) -> PhaseStatus | None:
-        """First phase after the current one with no content yet."""
         current = self.current_phase
         if current is None:
             return self.phases[0] if self.phases else None
@@ -165,7 +281,9 @@ class Issue:
 
     @property
     def is_complete(self) -> bool:
-        return all(p.has_content for p in self.phases)
+        # Complete when the evaluation phase has content.
+        evaluation = next((p for p in self.phases if p.name == "evaluation"), None)
+        return bool(evaluation and evaluation.has_content)
 
     @property
     def last_activity(self) -> datetime | None:
@@ -185,12 +303,20 @@ class Issue:
 class Review:
     pr: str
     pr_url: str
+    title: str
     last_verdict: str
     status: str
-    rounds: int
-    latest_round_comments: int
-    last_modified: datetime | None
+    rounds: list[Round]
     path: Path
+    last_modified: datetime | None
+
+    @property
+    def round_count(self) -> int:
+        return len(self.rounds)
+
+    @property
+    def total_comments(self) -> int:
+        return sum(_count_comments(r.path) for r in self.rounds)
 
     def age(self, ref: datetime | None = None) -> str:
         return humanize_age(self.last_modified, ref=ref)
@@ -200,6 +326,7 @@ class Review:
 class Workspace:
     root: Path
     repo_name: str
+    repo_root: Path
     issues: list[Issue] = field(default_factory=list)
     reviews: list[Review] = field(default_factory=list)
     lessons: list[str] = field(default_factory=list)
@@ -216,7 +343,6 @@ class Workspace:
 
     @property
     def phase_distribution(self) -> dict[str, int]:
-        """Count of active issues whose current phase is each phase name."""
         dist = {name: 0 for name in PHASE_ORDER}
         dist["complete"] = 0
         dist["empty"] = 0
@@ -230,17 +356,124 @@ class Workspace:
         return dist
 
 
+# --- scanning -----------------------------------------------------------------
+
+
+def _files_in(directory: Path) -> list[str]:
+    if not directory.is_dir():
+        return []
+    return sorted(p.name for p in directory.iterdir() if p.is_file())
+
+
+def _count_comments(round_dir: Path) -> int:
+    comments = round_dir / "comments"
+    if not comments.is_dir():
+        return 0
+    return sum(
+        1 for p in comments.iterdir() if p.is_file() and p.name != "summary.md"
+    )
+
+
+def _scan_rounds(parent: Path) -> list[Round]:
+    rounds: list[Round] = []
+    for d in sorted(p for p in parent.iterdir() if p.is_dir() and p.name.startswith("round-")):
+        # round artifacts may be nested (comments/, clusters/); collect leaf names shallowly.
+        rounds.append(
+            Round(
+                name=d.name,
+                files=_files_in(d),
+                path=d,
+                last_modified=_tree_latest_mtime(d),
+            )
+        )
+    return rounds
+
+
+def _scan_subphases(phase_dir: Path) -> list[SubPhase]:
+    subs: list[SubPhase] = []
+    for d in sorted(p for p in phase_dir.iterdir() if p.is_dir()):
+        rounds = _scan_rounds(d)
+        subs.append(
+            SubPhase(
+                name=d.name,
+                files=_files_in(d),
+                rounds=rounds,
+                path=d,
+                last_modified=_tree_latest_mtime(d),
+            )
+        )
+    return subs
+
+
 def _scan_phases(issue_dir: Path) -> list[PhaseStatus]:
     phases: list[PhaseStatus] = []
     for name in PHASE_ORDER:
         phase_dir = issue_dir / name
         files: list[str] = []
+        subphases: list[SubPhase] = []
         if phase_dir.is_dir():
-            files = sorted(p.name for p in phase_dir.iterdir() if p.is_file())
+            files = _files_in(phase_dir)
+            subphases = _scan_subphases(phase_dir)
         phases.append(
-            PhaseStatus(name=name, files=files, last_modified=_latest_mtime(phase_dir))
+            PhaseStatus(
+                name=name,
+                files=files,
+                subphases=subphases,
+                path=phase_dir,
+                last_modified=_tree_latest_mtime(phase_dir),
+            )
         )
     return phases
+
+
+def _parse_review_groups(plan_md: Path) -> list[str]:
+    """Pull `sub-N` group names out of the plan's review_groups YAML list."""
+    if not plan_md.is_file():
+        return []
+    groups: list[str] = []
+    in_block = False
+    for line in plan_md.read_text().splitlines():
+        if line.strip() == "---" and in_block:
+            break
+        if line.startswith("review_groups:"):
+            in_block = True
+            continue
+        if in_block:
+            m = re.match(r"\s*-\s*(sub-\w+)\s*:", line)
+            if m:
+                groups.append(m.group(1))
+            elif line and not line[0].isspace():
+                in_block = False
+    return groups
+
+
+def _load_plan_meta(issue_dir: Path) -> PlanMeta:
+    plan_md = issue_dir / "plan" / "plan.md"
+    if not plan_md.is_file():
+        return PlanMeta()
+    meta, _ = parse_frontmatter(plan_md.read_text())
+
+    def _int(key: str) -> int | None:
+        v = _clean(meta.get(key))
+        try:
+            return int(v) if v is not None else None
+        except ValueError:
+            return None
+
+    return PlanMeta(
+        branching_mode=_clean(meta.get("branching_mode")),
+        total_subtasks=_int("total_subtasks"),
+        total_commits=_int("total_commits"),
+        branch_name=_clean(meta.get("branch_name") or meta.get("proposed_branch")),
+        branch_created=_as_bool(meta.get("branch_created")),
+        target_branch=_clean(meta.get("target_branch")),
+        pr_url=_clean(meta.get("pr_url")),
+        pr_state=_clean(meta.get("pr_state")),
+        gh_issue_created=_as_bool(meta.get("gh_issue_created")),
+        review_groups=_parse_review_groups(plan_md),
+        last_feedback_round=_clean(meta.get("last_feedback_round")),
+        raw=meta,
+    )
 
 
 def _load_issue(issue_dir: Path, *, archived: bool) -> Issue:
@@ -249,16 +482,16 @@ def _load_issue(issue_dir: Path, *, archived: bool) -> Issue:
     body = ""
     if issue_md.is_file():
         meta, body = parse_frontmatter(issue_md.read_text())
-    experimental = meta.get("experimental", "false").strip().lower() == "true"
     return Issue(
-        id=meta.get("id", issue_dir.name),
-        title=meta.get("title", issue_dir.name),
+        id=_clean(meta.get("id")) or issue_dir.name,
+        title=_clean(meta.get("title")) or issue_dir.name,
         created=_parse_dt(meta.get("created")),
-        status=meta.get("status", "archived" if archived else "active"),
-        experimental=experimental,
+        status=_clean(meta.get("status")) or ("archived" if archived else "active"),
+        experimental=_as_bool(meta.get("experimental")),
         description=body,
         archived=archived,
         phases=_scan_phases(issue_dir),
+        plan=_load_plan_meta(issue_dir),
         path=issue_dir,
     )
 
@@ -268,32 +501,20 @@ def _load_review(review_dir: Path) -> Review:
     meta: dict[str, str] = {}
     if review_md.is_file():
         meta, _ = parse_frontmatter(review_md.read_text())
-    rounds = sorted(
-        p for p in review_dir.iterdir() if p.is_dir() and p.name.startswith("round-")
-    )
-    latest_comments = 0
-    if rounds:
-        comments_dir = rounds[-1] / "comments"
-        if comments_dir.is_dir():
-            latest_comments = sum(
-                1
-                for p in comments_dir.iterdir()
-                if p.is_file() and p.name != "summary.md"
-            )
+    rounds = _scan_rounds(review_dir)
     return Review(
-        pr=meta.get("pr", review_dir.name.replace("pr-", "")),
-        pr_url=meta.get("pr_url", ""),
-        last_verdict=meta.get("last_verdict", "—"),
-        status=meta.get("status", "active"),
-        rounds=len(rounds),
-        latest_round_comments=latest_comments,
-        last_modified=_latest_mtime(rounds[-1]) if rounds else _latest_mtime(review_dir),
+        pr=_clean(meta.get("pr")) or review_dir.name.replace("pr-", ""),
+        pr_url=_clean(meta.get("pr_url")) or "",
+        title=_clean(meta.get("title")) or "",
+        last_verdict=_clean(meta.get("last_verdict")) or "—",
+        status=_clean(meta.get("status")) or "active",
+        rounds=rounds,
         path=review_dir,
+        last_modified=_tree_latest_mtime(review_dir),
     )
 
 
 def find_workspace(start: Path | None = None) -> Path | None:
-    """Locate a `.dev-assistant/` directory at `start` or any parent."""
     current = (start or Path.cwd()).resolve()
     for candidate in (current, *current.parents):
         ws = candidate / WORKSPACE_DIRNAME
@@ -305,7 +526,6 @@ def find_workspace(start: Path | None = None) -> Path | None:
 def load_workspace(root: Path) -> Workspace:
     """Build a full in-memory snapshot of a `.dev-assistant/` workspace."""
     root = root.resolve()
-    repo_name = root.parent.name
 
     issues: list[Issue] = []
     issues_dir = root / "issues"
@@ -340,7 +560,8 @@ def load_workspace(root: Path) -> Workspace:
 
     return Workspace(
         root=root,
-        repo_name=repo_name,
+        repo_name=root.parent.name,
+        repo_root=root.parent,
         issues=issues,
         reviews=reviews,
         lessons=lessons,

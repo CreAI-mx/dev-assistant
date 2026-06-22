@@ -1,8 +1,9 @@
 """Textual app for the read-only dev-assistant dashboard.
 
-Left: a navigation tree (Overview / Issues / Reviews / Lessons) that drills down
-to individual artifact files. Right: a single Markdown pane that renders either a
-synthesized detail view or a raw artifact file — the `glow` replacement.
+Left: a navigation tree (Overview / Issues / Reviews / Lessons) drilling down
+through phases -> subtasks/sub-branches -> rounds -> artifact files. Right: a
+ContentSwitcher between a colored structured view (overview, issue timeline,
+review rounds) and a raw markdown viewer for individual artifacts.
 """
 from __future__ import annotations
 
@@ -12,66 +13,63 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Footer, Header, Markdown, Tree
+from textual.widgets import ContentSwitcher, Footer, Header, Markdown, Static, Tree
 from textual.widgets.tree import TreeNode
 
-from . import render
-from .model import Issue, Review, Workspace, load_workspace
+from . import render, theme
+from .gitinfo import GitInfo, load_git_info
+from .model import Issue, PhaseStatus, Review, Workspace, load_workspace
 
-# Node payload kinds.
 KIND_OVERVIEW = "overview"
 KIND_ISSUE = "issue"
 KIND_REVIEW = "review"
 KIND_FILE = "file"
-KIND_GROUP = "group"
 
 
 class DashboardApp(App):
     CSS = """
-    Screen {
-        layout: horizontal;
-    }
     #nav {
-        width: 38;
-        min-width: 28;
+        width: 42;
+        min-width: 30;
         border-right: solid $primary;
     }
-    #content {
-        padding: 0 1;
-    }
-    Tree {
-        padding: 0 1;
-    }
+    Tree { padding: 0 1; }
+    #content { padding: 0 1; }
+    #struct, #file { padding: 0 1; }
     """
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("o", "overview", "Overview"),
-        Binding("e", "toggle_expand", "Expand/Collapse"),
     ]
 
     def __init__(self, workspace_root: Path) -> None:
         super().__init__()
         self.workspace_root = workspace_root
         self.workspace: Workspace | None = None
+        self.git: GitInfo | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal():
             yield Tree("dev-assistant", id="nav")
-            with VerticalScroll(id="content"):
-                yield Markdown("# Loading…", id="detail")
+            with ContentSwitcher(initial="struct", id="content"):
+                with VerticalScroll(id="struct"):
+                    yield Static(id="structured")
+                with VerticalScroll(id="file"):
+                    yield Markdown(id="fileview")
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "dev-assistant"
         self._reload()
 
-    # --- data / tree construction ------------------------------------------
+    # --- data / tree --------------------------------------------------------
 
     def _reload(self) -> None:
         self.workspace = load_workspace(self.workspace_root)
+        self.git = load_git_info(self.workspace.repo_root)
         self.sub_title = f"{self.workspace.repo_name}  ·  {self.workspace.root}"
         tree = self.query_one("#nav", Tree)
         tree.clear()
@@ -84,87 +82,106 @@ class DashboardApp(App):
         assert ws is not None
 
         overview = tree.root.add(
-            Text.from_markup("[bold]📊 Overview[/]"), data={"kind": KIND_OVERVIEW}
+            Text("Overview", style="bold"), data={"kind": KIND_OVERVIEW}
         )
         overview.allow_expand = False
 
         active = ws.active_issues
-        issues_node = tree.root.add(
-            Text.from_markup(f"[bold]📋 Issues[/] [dim]({len(active)} active)[/]")
-        )
+        issues_node = tree.root.add(_section("Issues", len(active)))
         issues_node.expand()
         for issue in active:
             self._add_issue_node(issues_node, issue)
 
         archived = ws.archived_issues
         if archived:
-            arch_node = tree.root.add(
-                Text.from_markup(f"[bold]📦 Archived[/] [dim]({len(archived)})[/]")
-            )
+            arch_node = tree.root.add(_section("Archived", len(archived)))
             for issue in archived:
                 self._add_issue_node(arch_node, issue)
 
         if ws.reviews:
-            reviews_node = tree.root.add(
-                Text.from_markup(f"[bold]🔍 Reviews[/] [dim]({len(ws.reviews)})[/]")
-            )
+            reviews_node = tree.root.add(_section("Reviews", len(ws.reviews)))
             reviews_node.expand()
             for review in ws.reviews:
                 self._add_review_node(reviews_node, review)
 
         if ws.lessons:
-            lessons_node = tree.root.add(
-                Text.from_markup(f"[bold]📚 Lessons[/] [dim]({len(ws.lessons)})[/]")
-            )
+            lessons_node = tree.root.add(_section("Lessons", len(ws.lessons)))
             for name in ws.lessons:
                 lessons_node.add_leaf(
-                    name,
-                    data={"kind": KIND_FILE, "path": ws.root / "lessons" / name},
+                    name, data={"kind": KIND_FILE, "path": ws.root / "lessons" / name}
                 )
 
     def _add_issue_node(self, parent: TreeNode, issue: Issue) -> None:
         bar = render.progress_bar(issue.completed_count, issue.total_phases)
-        cur = "done" if issue.is_complete else (
+        state = "complete" if issue.is_complete else (
             issue.current_phase.label if issue.current_phase else "new"
         )
-        flag = " ⚗️" if issue.experimental else ""
-        label = Text.from_markup(
-            f"[bold cyan]{_esc(issue.id)}[/]{flag}  [green]{bar}[/] [dim]{cur}[/]"
-        )
+        label = Text()
+        label.append(issue.id, style="bold cyan")
+        if issue.experimental:
+            label.append(" exp", style="yellow")
+        label.append(f"  {bar} ", style="green")
+        label.append(state, style="dim")
         node = parent.add(label, data={"kind": KIND_ISSUE, "issue": issue})
+
         for phase in issue.phases:
-            if not phase.files:
+            if not phase.has_content:
                 continue
-            phase_node = node.add(
-                Text.from_markup(f"[yellow]{phase.name}[/] [dim]({len(phase.files)})[/]")
-            )
-            for fname in phase.files:
-                phase_node.add_leaf(
-                    fname,
-                    data={"kind": KIND_FILE, "path": issue.path / phase.name / fname},
-                )
-        # The issue.md itself.
+            self._add_phase_node(node, issue, phase)
+
         issue_md = issue.path / "issue.md"
         if issue_md.is_file():
-            node.add_leaf(
-                "issue.md", data={"kind": KIND_FILE, "path": issue_md}
+            node.add_leaf("issue.md", data={"kind": KIND_FILE, "path": issue_md})
+
+    def _add_phase_node(self, parent: TreeNode, issue: Issue, phase: PhaseStatus) -> None:
+        state = issue.phase_state(phase)
+        label = Text()
+        label.append(f"{theme.state_icon(state)} ", style=theme.state_style(state))
+        label.append(phase.label, style="yellow")
+        meta = render._phase_meta(phase)
+        if meta:
+            label.append(f"  {meta}", style="dim")
+        phase_node = parent.add(label)
+
+        for fname in phase.files:
+            phase_node.add_leaf(
+                fname, data={"kind": KIND_FILE, "path": phase.path / fname}
             )
+        for sp in phase.subphases:
+            if not sp.has_content:
+                continue
+            sp_label = Text()
+            sp_label.append(sp.name, style="cyan")
+            bits = []
+            if sp.round_count:
+                bits.append(f"{sp.round_count}r")
+            if sp.files:
+                bits.append(f"{len(sp.files)}f")
+            if bits:
+                sp_label.append(f"  {' '.join(bits)}", style="dim")
+            sp_node = phase_node.add(sp_label)
+            for fname in sp.files:
+                sp_node.add_leaf(
+                    fname, data={"kind": KIND_FILE, "path": sp.path / fname}
+                )
+            for rnd in sp.rounds:
+                rnode = sp_node.add(Text(rnd.name, style="yellow"))
+                for f in sorted(rnd.path.rglob("*.md")):
+                    rnode.add_leaf(
+                        str(f.relative_to(rnd.path)),
+                        data={"kind": KIND_FILE, "path": f},
+                    )
 
     def _add_review_node(self, parent: TreeNode, review: Review) -> None:
-        label = Text.from_markup(
-            f"[bold magenta]pr-{_esc(review.pr)}[/]  [dim]{_esc(review.last_verdict)} "
-            f"· r{review.rounds}[/]"
-        )
+        label = Text()
+        label.append(f"pr-{review.pr}", style="bold magenta")
+        label.append(f"  {review.last_verdict} · r{review.round_count}", style="dim")
         node = parent.add(label, data={"kind": KIND_REVIEW, "review": review})
-        # List round folders and their files.
-        for round_dir in sorted(
-            p for p in review.path.iterdir() if p.is_dir() and p.name.startswith("round-")
-        ):
-            round_node = node.add(Text.from_markup(f"[yellow]{round_dir.name}[/]"))
-            for f in sorted(round_dir.rglob("*.md")):
-                rel = f.relative_to(round_dir)
-                round_node.add_leaf(
-                    str(rel), data={"kind": KIND_FILE, "path": f}
+        for rnd in review.rounds:
+            rnode = node.add(Text(rnd.name, style="yellow"))
+            for f in sorted(rnd.path.rglob("*.md")):
+                rnode.add_leaf(
+                    str(f.relative_to(rnd.path)), data={"kind": KIND_FILE, "path": f}
                 )
         review_md = review.path / "review.md"
         if review_md.is_file():
@@ -172,26 +189,26 @@ class DashboardApp(App):
 
     # --- rendering ----------------------------------------------------------
 
-    def _detail(self) -> Markdown:
-        return self.query_one("#detail", Markdown)
+    def _show_struct(self, renderable) -> None:
+        self.query_one("#structured", Static).update(renderable)
+        self.query_one("#content", ContentSwitcher).current = "struct"
+        self.query_one("#struct", VerticalScroll).scroll_home(animate=False)
 
     def _show_overview(self) -> None:
         if self.workspace is None:
             return
-        self._detail().update(render.render_overview(self.workspace))
-        self.query_one("#content").scroll_home(animate=False)
-
-    def _show_markdown(self, text: str) -> None:
-        self._detail().update(text)
-        self.query_one("#content").scroll_home(animate=False)
+        self._show_struct(render.render_overview(self.workspace, git=self.git))
 
     def _show_file(self, path: Path) -> None:
         try:
             text = path.read_text()
         except OSError as exc:
-            self._show_markdown(f"# Cannot read file\n\n`{path}`\n\n```\n{exc}\n```")
+            self._show_struct(Text(f"Cannot read {path}\n\n{exc}", style="red"))
             return
-        self._show_markdown(text)
+        md = self.query_one("#fileview", Markdown)
+        md.update(text)
+        self.query_one("#content", ContentSwitcher).current = "file"
+        self.query_one("#file", VerticalScroll).scroll_home(animate=False)
 
     # --- events / actions ---------------------------------------------------
 
@@ -203,9 +220,9 @@ class DashboardApp(App):
         if kind == KIND_OVERVIEW:
             self._show_overview()
         elif kind == KIND_ISSUE:
-            self._show_markdown(render.render_issue(data["issue"]))
+            self._show_struct(render.render_issue(data["issue"], git=self.git))
         elif kind == KIND_REVIEW:
-            self._show_markdown(render.render_review(data["review"]))
+            self._show_struct(render.render_review(data["review"]))
         elif kind == KIND_FILE:
             self._show_file(data["path"])
 
@@ -216,16 +233,11 @@ class DashboardApp(App):
     def action_overview(self) -> None:
         self._show_overview()
 
-    def action_toggle_expand(self) -> None:
-        node = self.query_one("#nav", Tree).cursor_node
-        if node is None or not node.allow_expand:
-            return
-        node.toggle()
 
-
-def _esc(value: str) -> str:
-    """Escape Rich markup brackets in dynamic text."""
-    return value.replace("[", "\\[")
+def _section(name: str, count: int) -> Text:
+    label = Text(name, style="bold")
+    label.append(f"  {count}", style="dim")
+    return label
 
 
 def run(workspace_root: Path) -> None:
