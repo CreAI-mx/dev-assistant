@@ -1,8 +1,8 @@
 # Team update template (default)
 
-The default shape for the message you copy-paste into your team's chat (Slack / Discord / Teams) when a PR opens via `/dev-execute` wrap-up. Default language is **Spanish**. Override per-repo by running `dev-assistant strategies customize team-update-template`.
+The default shape for the message you copy-paste into your team's chat (Slack / Discord / Teams) when a PR is marked Ready for review via `/dev-execute` wrap-up. Default language is **Spanish**. Override per-repo by running `dev-assistant strategies customize team-update-template`.
 
-Generated at sub-phase 4 of `/dev-execute`, after the PR is open. Shown in chat for easy copy and saved to `execution/team-message.txt` for the record.
+Generated at sub-phase 4 of `/dev-execute`, after the PR is marked Ready (the draft PR itself opened at execute start). Shown in chat for easy copy and saved to `execution/team-message.txt` for the record.
 
 ## Format (Spanish, default)
 
@@ -14,14 +14,14 @@ Cambios principales:
 - <bullet 2>
 - <bullet 3 si aplica>
 
-Targeting: version/<x.y.z>. Cualquier feedback bienvenido.
+Targeting: develop. Cualquier feedback bienvenido.
 ```
 
 Three sections, in order:
 
 1. **Lead line:** PR title with ticket prefix + URL. Make it clickable.
 2. **Cambios principales:** 2–3 bullets drawn from the subtask titles and commit messages. Describe outcomes, not mechanics.
-3. **Cierre:** target branch + open invitation for feedback. Keep it short.
+3. **Cierre:** target branch (`develop`) + open invitation for feedback. Keep it short.
 
 ## Style notes
 
@@ -42,7 +42,7 @@ Good:
 > - Callback handler en el auth router
 > - Tests unitarios cubriendo el flujo completo
 >
-> Targeting: version/1.2.0. Cualquier feedback bienvenido.
+> Targeting: develop. Cualquier feedback bienvenido.
 
 Bad:
 

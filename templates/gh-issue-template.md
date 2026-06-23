@@ -41,7 +41,7 @@ Capitalized. Imperative verb up front. No trailing period. The bracketed ticket 
 
 ## Branch
 
-`feat/<TICKET>-<slug>` (target: `version/<resolved x.y.z>`)
+`feat/<TICKET>-<slug>` (target: `develop`)
 ```
 
 ## Style notes

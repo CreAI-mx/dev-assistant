@@ -81,11 +81,11 @@ One line, italic, after a blank line at the end of the summary body. Customize p
 
 Good:
 
-> PR opened: https://github.com/org/repo/pull/42. Rebased on `version/1.2.0`, 1 approval needed.
+> PR ready for review: https://github.com/org/repo/pull/42. Rebased on `develop`, 1 approval needed.
 
 Bad:
 
-> Hi team! I wanted to give you all a quick update. I've gone ahead and opened a pull request for this ticket which you can find at the following URL: https://github.com/org/repo/pull/42. It targets the version 1.2.0 branch and is rebased and ready for review whenever you have a chance!
+> Hi team! I wanted to give you all a quick update. I've gone ahead and opened a pull request for this ticket which you can find at the following URL: https://github.com/org/repo/pull/42. It targets the develop branch and is rebased and ready for review whenever you have a chance!
 
 Good:
 

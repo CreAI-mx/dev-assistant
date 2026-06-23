@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is in alpha (`0.x`), breaking changes may land in any minor version.
 
+## [0.5.0] - 2026-06-16
+
+Migrates the default branching strategy from the v1.x sprint-version model to **v2.0** (sprint-driven, trunk-friendly), matching the Akinator engine team's Contributing wiki. **Breaking** for in-flight issues planned under the old model — see *Migration*.
+
+### Changed
+
+- **`branching-strategy.md` rewritten to v2.0.** Removed the `version/x.y.z` sprint branch as a batch gate: feature branches now branch off `develop` and merge directly back into `develop`. Added the permanent `uat` branch, the `hotfix/<TICKET>-<slug>` flow (two PRs: `uat` + `develop`), and the `--xrepo` cross-repo branch suffix (same branch name across repos, coordinated merge). `uat` / `hotfix` / `--xrepo` are documented in the strategy; the commands still drive the normal `feat → develop` flow.
+- **Draft PR opens at the *start* of execution, not at wrap-up.** Per v2.0, work begins by opening a draft PR — the start-of-work signal. `/dev-execute` sub-phase 1b now branches off `origin/develop` and makes an empty `chore: open draft pr feat/<TICKET>-<slug>` commit (so the branch diverges from `develop` and the PR has a base); a new **sub-phase 1c** pushes and opens the draft PR → `develop` (each external op confirmed). Wrap-up (4.5) now refreshes the PR body and marks it **Ready for review** (`gh pr ready`) instead of opening it — falling back to a fresh open if 1c was declined.
+- `/dev-plan`: `target_version: latest` frontmatter replaced with `target_branch: develop`; branching-mode descriptions updated (draft PR at start, Ready at wrap-up). `/dev-execute` wrap-up report frontmatter `target_version` → `target_branch`.
+- Wrap-up rebases onto `origin/develop` (was the latest `version/x.y.z`). Sub-PRs still target the parent feature branch; in `sub-branches` mode the parent draft PR opens at start and is marked Ready once all sub-PRs merge.
+- Templates updated to target `develop`: `gh-issue-template` (branch target), `team-update-template` (Targeting line + wrap-up framing), `comment-style` (PR-ready example). `pr-template` is now consumed twice by `/dev-execute` — at draft-PR open (scope/plan framing) and at wrap-up (finished-work framing).
+
+### Migration
+
+- Plans written before 0.5.0 with `target_version: latest` still work: `/dev-execute` branches off `develop` regardless, and wrap-up 4.5 opens the PR fresh as Ready if no draft `pr_url` was recorded. Repos that still use a `version/x.y.z` sprint branch should run `dev-assistant strategies customize branching-strategy` and keep the v1.x flow in their per-repo override.
+
 ## [0.4.0] - 2026-06-10
 
 Adds the refine phase (phase 0): the previously-unmodeled step where a thin ticket is thought through and rewritten before any gathering happens.

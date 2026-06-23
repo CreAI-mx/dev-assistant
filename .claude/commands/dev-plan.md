@@ -51,8 +51,8 @@ When a subtask would need 4 commits, that's a signal it should be two subtasks. 
 
 Every issue is executed in one of two branching modes. The choice is made in sub-stage 4 and recorded as `branching_mode` in `plan.md` frontmatter:
 
-- **`single-branch`** (default) — one `feat/<TICKET>-<slug>` branch for the whole issue. Subtasks land as commits on it; one PR opens at wrap-up. The per-PR commit backstop (≤10) applies to the issue total.
-- **`sub-branches`** — each subtask gets its own `feat/<TICKET>-<slug>-sub-N` branch off the parent feature branch, with its own sub-PR (target: the parent feature branch) opened at subtask completion. Wrap-up opens the parent PR (feat → version) once all sub-PRs are merged. The per-PR backstop applies per sub-PR (trivially satisfied at ≤3 commits each); the issue-level commit total may exceed 10.
+- **`single-branch`** (default) — one `feat/<TICKET>-<slug>` branch (off `develop`) for the whole issue. Subtasks land as commits on it. A draft PR → `develop` opens at execute start (sub-phase 1c) and is marked Ready at wrap-up. The per-PR commit backstop (≤10) applies to the issue total.
+- **`sub-branches`** — each subtask gets its own `feat/<TICKET>-<slug>-sub-N` branch off the parent feature branch, with its own sub-PR (target: the parent feature branch) opened at subtask completion. The parent's draft PR → `develop` still opens at execute start and is marked Ready at wrap-up once all sub-PRs are merged. The per-PR backstop applies per sub-PR (trivially satisfied at ≤3 commits each); the issue-level commit total may exceed 10.
 
 Recommend `sub-branches` when the total commit estimate pushes past the 8–10 band, when subtasks are independent enough to review in isolation, or when the user wants work landing incrementally instead of one big PR at the end. Otherwise default to `single-branch`. The user always decides.
 
@@ -148,7 +148,7 @@ Now propose the full picture:
 - **Dependency graph**: for each subtask, set `depends_on: [<ids>]`. Default linear (subtask N depends on N-1). Mark any safe parallels (`depends_on: []` when truly independent) — useful metadata for future fan-out, even though `/dev-execute` is per-subtask serial. Dependencies are between subtasks, not between commits within a subtask.
 - **Branch slug**: `feat/$ARGUMENTS-<short-slug>` where `<short-slug>` is 2–4 kebab-case words derived from the issue purpose. Keep it short and specific.
 - **Branching mode**: propose `single-branch` or `sub-branches` per the criteria in the decomposition model, with a one-line rationale (e.g. "total estimate is 9 commits and subtasks 02–04 are independent — recommend `sub-branches`"). The user decides; record the outcome.
-- **Target version branch**: record as `latest at execute time` — do not resolve here. `/dev-execute` will `git fetch origin` and pick the highest `version/x.y.z` on the remote at first-subtask time.
+- **Target branch**: always `develop` per the branching strategy — `/dev-execute` branches off `origin/develop` and the feature PR targets `develop`. No resolution needed here.
 - **Coverage map**: a table showing which subtasks cover which objectives. Mechanical check — confirm every specific objective is covered.
 
 Present all five to the user.
@@ -231,7 +231,7 @@ phase: plan
 status: complete
 proposed_branch: feat/$ARGUMENTS-<slug>
 branching_mode: <single-branch | sub-branches>
-target_version: latest
+target_branch: develop
 total_subtasks: <n>
 total_commits: <sum of commits across subtasks>
 ---
@@ -242,9 +242,9 @@ See [report.md](./report.md) for the planning process, alternatives, and viabili
 
 ## Branch info (proposed — `/dev-execute` creates the branches)
 
-- **Feature branch**: `feat/$ARGUMENTS-<slug>`
-- **Branching mode**: `single-branch` (subtasks land as commits on the feature branch; one PR at wrap-up) or `sub-branches` (each subtask gets `feat/$ARGUMENTS-<slug>-sub-N` off the feature branch with its own sub-PR at completion; parent PR at wrap-up)
-- **Target version branch**: latest `version/x.y.z` on `origin` (resolved by `/dev-execute` via `git fetch origin` at first-subtask time)
+- **Feature branch**: `feat/$ARGUMENTS-<slug>` (off `develop`)
+- **Branching mode**: `single-branch` (subtasks land as commits on the feature branch; draft PR → `develop` at start, marked Ready at wrap-up) or `sub-branches` (each subtask gets `feat/$ARGUMENTS-<slug>-sub-N` off the feature branch with its own sub-PR at completion; parent draft PR → `develop` at start, marked Ready at wrap-up)
+- **Target branch**: `develop` (`/dev-execute` branches off `origin/develop`; the feature PR targets `develop`)
 - **GitHub issue**: not yet created — `/dev-execute` creates it on the first subtask. One GH issue per Jira parent ticket, regardless of branching mode (Jira subtasks never get their own GH issue)
 
 ## Coverage map
