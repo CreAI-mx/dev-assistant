@@ -57,6 +57,20 @@ Six phase commands (refine is optional), each producing artifacts under `.dev-as
 
 Customizable per repo via `dev-assistant strategies customize <name>` for branching, PR template, comment style, etc. Repo-owned rules documents are pointed at via `.dev-assistant/repo-context.md` and re-read on every phase invocation so the source of truth stays in the target repo.
 
+## Terminal dashboard (experimental)
+
+A read-only terminal UI for browsing a repo's `.dev-assistant/` workspace — issues, phases, subtasks, review rounds, and lessons — without leaving the terminal. It introspects the artifacts on disk plus live git/PR state; it never writes anything.
+
+```bash
+# Requires the optional [tui] extra (Textual):
+pipx install -e '/path/to/this/repo[tui]'        # or: python3 -m pip install --user -e ".[tui]"
+
+dev-assistant tui                  # discovers .dev-assistant/ in the current dir or a parent
+dev-assistant tui --path /some/repo
+```
+
+A navigation tree (Overview / Issues / Reviews / Lessons) drills down through phases → subtasks/sub-branches → rounds → artifact files. The detail pane shows workspace rollups and a pipeline distribution chart, a per-issue timeline (phases with state dots), a status panel (branch, sub-branches, PR publish state, GitHub issue link, commits from `plan.md` + live git), review breakdowns, and a raw markdown viewer for individual artifacts. Output is monochrome (no emoji). Experimental and read-only — it's a viewer, not a controller.
+
 ## Install
 
 Requires Python ≥ 3.10.
