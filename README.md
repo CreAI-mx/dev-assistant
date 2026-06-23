@@ -61,6 +61,8 @@ Customizable per repo via `dev-assistant strategies customize <name>` for branch
 
 A read-only terminal UI for browsing a repo's `.dev-assistant/` workspace — issues, phases, subtasks, review rounds, and lessons — without leaving the terminal. It introspects the artifacts on disk plus live git/PR state; it never writes anything.
 
+![dev-assistant terminal dashboard](docs/tui.png)
+
 ```bash
 # Requires the optional [tui] extra (Textual):
 pipx install -e '/path/to/this/repo[tui]'        # or: python3 -m pip install --user -e ".[tui]"
