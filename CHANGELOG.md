@@ -4,9 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is in alpha (`0.x`), breaking changes may land in any minor version.
 
-## [0.5.0] - 2026-06-16
+## [0.5.0] - 2026-06-23
 
-Migrates the default branching strategy from the v1.x sprint-version model to **v2.0** (sprint-driven, trunk-friendly), matching the Akinator engine team's Contributing wiki. **Breaking** for in-flight issues planned under the old model — see *Migration*.
+Migrates the default branching strategy from the v1.x sprint-version model to **v2.0** (sprint-driven, trunk-friendly), matching the Akinator engine team's Contributing wiki, and ships an experimental read-only **terminal dashboard**. **Breaking** for in-flight issues planned under the old model — see *Migration*.
+
+### Added
+
+- **Terminal dashboard (`dev-assistant tui`).** Read-only Textual UI for browsing a repo's `.dev-assistant/` workspace — issues, phases, subtasks/sub-branches, review rounds, and lessons — driven by the artifacts on disk plus live git/PR introspection (it never writes). A navigation tree drills into a detail pane showing workspace rollups and a pipeline distribution chart, per-issue timelines with state dots, a status panel (branch, sub-branches, PR publish state, GitHub issue link, commits from `plan.md` + git), review breakdowns, and a raw markdown viewer. Monochrome output (no emoji). Requires the optional `[tui]` extra (`pip install -e ".[tui]"`). Experimental.
 
 ### Changed
 
