@@ -20,7 +20,9 @@ In `sub-branches` mode with no subtask argument: if the parent `pr_url` is not y
 
 ## Current state of the issue
 
-!`dev-assistant issue show --id $ARGUMENTS`
+!`dev-assistant issue show --id $1`
+
+(`$1` is the issue ID alone — the optional subtask number must never reach the CLI; it takes exactly one `--id` value.)
 
 Then read these files directly for state:
 
@@ -39,6 +41,7 @@ Before doing anything, verify all of:
 5. **On the right branch** — current branch matches the target PR's branch: `plan.md`'s `branch_name`, or the subtask's `sub_branch` when targeting a sub-PR. If not, stop with *"Expected to be on `<branch>`, found `<current>`. Check out the right branch first."*.
 6. **Not experimental** — read `issue.md` frontmatter. If `experimental: true`, stop with *"Experimental mode is active for `<issue-id>`. No PR exists to review. `/dev-feedback` is skipped."*. (Experimental mode never opens a PR, so there is nothing to feed back on.)
 7. **`gh` CLI authenticated** — `gh auth status` exits cleanly. If not, stop with *"`gh` is not authenticated. Run `gh auth login` first."*.
+8. **PR base is what the plan says** — `gh pr view <pr_url> --json baseRefName` matches `plan.md`'s `target_branch` (default `develop` when the field is missing; for a sub-PR target, the base must be the parent `branch_name`). On mismatch, stop with *"PR base is `<actual>` but the plan targets `<expected>`. Fix the PR base (`gh pr edit --base`) or the plan before running feedback."* — fixes verified against the wrong base are worthless.
 
 If any check fails, stop. Do not attempt sub-phase 1.
 
@@ -498,7 +501,7 @@ Options:
 - **Approve** → proceed to 5.2.
 - **Edit** → re-open the specified `reply.md`, let user edit, re-assemble, re-show.
 - **Skip specific** → mark those clusters `reply_skipped: true` in `meta.md`, re-show without them.
-- **Abandon posting** → record `posting_abandoned: true` in the round report, jump to 5.5 (still write the round report and update state).
+- **Abandon posting** → record `posting_abandoned: true` in the round report, jump to 5.7 (still write the round report and update state; skip 5.5–5.6 — nothing was pushed or posted, so there's no commit map to update or remote state to verify).
 
 ### 5.2 — Push (CONFIRM)
 
@@ -544,11 +547,30 @@ Options:
 
 For `question` / `discussion` clusters (action `reply-only` or `discussion-deferred`): never auto-resolve. The user decides when those conversations are done.
 
-### 5.5 — Update PR body if subtask state changed (optional, CONFIRM)
+### 5.5 — Update the PR body's commit map (CONFIRM)
 
-If any cluster commit changed material the original PR body summarized (rare), offer to regenerate the PR body from current state and `gh pr edit --body`. Default: skip unless user opts in. This is a future enhancement; v1 keeps it minimal.
+The PR body carries a `## Commit map` table (written at execute wrap-up) mapping each commit to its subtask / Jira subtask. This round added commits, so the map is now stale. Append one row per new commit:
 
-### 5.6 — Write round report
+```
+| <short-sha> | review round <NN> — <cluster slug> | — | <commit subject> |
+```
+
+**Display the rows to append. Ask: "Update the PR body's commit map with this round's <n> commits? Proceed?"** On confirm: `gh pr edit <pr_url> --body "<updated body>"`. On decline: skip (note it in the round report). If the PR body has no commit map (pre-0.6 PRs), offer to add the full table instead.
+
+Separately: if any cluster commit changed material the original PR body *prose* summarized (rare), offer to regenerate those sections in the same edit. Default: skip unless the user opts in.
+
+### 5.6 — Verify remote state (before writing the report)
+
+The report must record what is actually true on GitHub, not what this session believes it did. Verify:
+
+1. **Replies landed** — re-fetch the PR comments and confirm every reply posted in 5.3 actually exists remotely (match by our author + body prefix). List any missing.
+2. **Branch in sync** — `git rev-parse HEAD` equals `git rev-parse origin/<branch>` after `git fetch origin`. If not, the reviewers can't see the fixes the replies reference.
+3. **Threads resolved as claimed** — for threads resolved in 5.4, spot-check `isResolved` via the GraphQL query used at pull time.
+4. **PR state** — `gh pr view <pr_url> --json state,isDraft,reviewDecision,baseRefName`: still open, not draft, base unchanged, and the current review decision (`APPROVED` / `CHANGES_REQUESTED` / none).
+
+Surface a compact checklist to the user (✓/✗ per item). Any ✗ is not auto-fixed — surface it and let the user decide; record it in the report either way.
+
+### 5.7 — Write round report
 
 Write `feedback/round-NN/report.md`:
 
@@ -568,12 +590,22 @@ clusters_reply_only: <n>
 clusters_deferred: <n>
 threads_resolved: <n>
 commits_added: [<sha1>, <sha2>, ...]
+remote_state:
+  replies_confirmed: <n>/<n>
+  branch_in_sync: <true | false>
+  threads_resolved_confirmed: <true | false | skipped>
+  pr_state: <open | draft | merged | closed>
+  review_decision: <APPROVED | CHANGES_REQUESTED | none>
+  commit_map_updated: <true | false>
 ---
 
 # Feedback round <NN> — <issue-id>
 
 ## Summary
 1–2 sentences: what came in, what was addressed, what was deferred.
+
+## Remote state (verified at 5.6)
+What GitHub actually shows after this round: replies confirmed present, branch sync, thread resolution, PR state + review decision. Call out any ✗ explicitly.
 
 ## Clusters
 | # | Slug | Severity | Action | Outcome |
@@ -590,7 +622,7 @@ commits_added: [<sha1>, <sha2>, ...]
 What was hard, what reviewers cared about, what we got wrong the first time.
 ```
 
-### 5.7 — Update plan.md state
+### 5.8 — Update plan.md state
 
 In `plan.md` frontmatter, record:
 
@@ -598,18 +630,22 @@ In `plan.md` frontmatter, record:
 - `last_feedback_pulled_at: <pulled_at>`
 - `last_feedback_posted_at: <posted_at>`
 
-### 5.8 — Final report
+### 5.9 — Final report
 
 ```
 Feedback round NN complete for <issue-id>.
   - K comments pulled, M clusters
   - C clusters applied (X commits), R replies posted, T threads resolved
+  - Remote state: <one line — all verified, or what's off>
   - Deferred: D clusters (see report.md)
-  - PR: <url>
+  - PR: <url> (review decision: <APPROVED | CHANGES_REQUESTED | none>)
   - Round folder: .dev-assistant/issues/<issue-id>/feedback/round-NN/
 
 Next: re-run `/dev-feedback <issue-id>` when new review comments arrive.
+      If the review decision is APPROVED and nothing is deferred: `/dev-merge <issue-id>`.
 ```
+
+Reminder to surface alongside the final report (once per round): review feedback also arrives through the Slack channel where the PR was announced — anything received there can be pasted into the next `/dev-feedback` round and will be triaged with the GitHub comments.
 
 ---
 

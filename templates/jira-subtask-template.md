@@ -12,6 +12,10 @@ Pulled directly from the subtask's `title:` field in `plan.md`. Capitalized, imp
 - `Wire OAuth callback into the auth router`
 - `Add unit tests for OAuthProvider`
 
+## Assignee
+
+Set the subtask's assignee to the **currently authenticated Jira user** — resolve the account ID via the Atlassian MCP (`atlassianUserInfo`) at creation time. Never hardcode a name or account ID; the template is used by anyone running the phase.
+
 ## Description (Jira "Description" field)
 
 ```

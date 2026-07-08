@@ -27,6 +27,7 @@ Then read these files directly:
 - `.dev-assistant/issues/<issue-id>/execution/*/execution-notes.md` (all subtasks)
 - `.dev-assistant/issues/<issue-id>/execution/wrap-up-report.md`
 - `.dev-assistant/issues/<issue-id>/feedback/round-*/report.md` (all rounds, if any)
+- `.dev-assistant/issues/<issue-id>/merge/report.md` (if it exists — the PR was merged via `/dev-merge`)
 
 ## Pre-flight (stop early on failure)
 
@@ -93,12 +94,24 @@ Classify the PR into one of:
 
 - **`merged`** — `merged: true`
 - **`closed-unmerged`** — `state: CLOSED` and `merged: false` (abandoned)
-- **`open`** — `state: OPEN`
+- **`open`** — `state: OPEN` (if reviews are done and it's approved, the missing step is `/dev-merge <issue-id>` — suggest it)
 - **`n/a`** — experimental mode, no PR opened
 
-Build a timeline mentally (no need to write it out yet): gather start → plan written → execute first subtask → ... → PR opened → feedback rounds → current state.
+### Verify remote state (don't trust the local artifacts alone)
 
-Surface to the user: *"Loaded artifacts for `<issue-id>`. PR state: `<state>`. <N> subtasks, <M> feedback rounds."*
+The retro must be grounded in what GitHub/Jira actually show, not what the phase reports claim. In normal mode, verify:
+
+1. **PR** — the classification above, plus `mergeCommit` (matches `merge/report.md`?), `reviewDecision`, and review-round count vs local `feedback/round-*` folders.
+2. **Replies posted** — for each feedback round report, spot-check that the replies it records as posted actually exist on the PR (comments authored by the current `gh` user). A round with `partial_post: true` or missing replies is a finding for the retro.
+3. **GH issue** — `gh issue view <num> --json state,assignees` (exists? still open? assigned?).
+4. **Branch** — does `origin/<branch_name>` still exist? (Post-merge it should be deleted per the strategy; still existing after merge is a loose end.)
+5. **Jira** — via Atlassian MCP if available: parent + subtask statuses as they stand now.
+
+Record the results — they feed the retro's "Remote state" section and the report frontmatter.
+
+Build a timeline mentally (no need to write it out yet): gather start → plan written → execute first subtask → ... → PR opened → feedback rounds → merge → current state.
+
+Surface to the user: *"Loaded artifacts for `<issue-id>`. PR state: `<state>` (verified remotely). <N> subtasks, <M> feedback rounds. Remote checks: <all consistent | list of discrepancies>."*
 
 ## Sub-phase 2 — Analyze (outcomes + drift)
 
@@ -145,7 +158,11 @@ experimental: <true | false>
 
 ## Timeline
 
-Chronological account from gather to current state. One short paragraph per major beat: gathering, planning, executing, feedback rounds, PR outcome.
+Chronological account from gather to current state. One short paragraph per major beat: gathering, planning, executing, feedback rounds, merge, PR outcome.
+
+## Remote state
+
+What GitHub/Jira actually showed at evaluation time (from the sub-phase 1 verification): PR + merge commit, replies-posted spot-check, GH issue state, branch cleanup, Jira statuses. Discrepancies between local reports and remote reality are retro findings — list them here.
 
 ## Outcomes against objectives
 
@@ -402,19 +419,29 @@ If any step fails: surface the error verbatim, stop the batch, record what compl
 
 `evaluation/lessons.md` is already at `status: approved` from sub-phase 3.3. Nothing to do here except confirm it exists.
 
-### 5.2 — Repo-wide lessons archive (one file per lesson)
+### 5.2 — Repo-wide lessons archive (organized by category, deduplicated, indexed)
 
-For each lesson in `evaluation/lessons.md`, create an individual file at:
+The archive is organized so lessons can actually be found and so recurring lessons accumulate weight instead of piling up as near-duplicates.
+
+**Layout:**
 
 ```
-.dev-assistant/lessons/<YYYY-MM-DD>-<issue-id>-<lesson-slug>.md
+.dev-assistant/lessons/
+  INDEX.md                 ← regenerated on every archive run
+  process/
+    <YYYY-MM-DD>-<issue-id>-<lesson-slug>.md
+  technical/
+    ...
+  collaboration/
+    ...
 ```
 
-Where:
+`mkdir -p` the category folders as needed. **Migration:** if flat lesson files exist at the `lessons/` root (pre-0.6 layout), move each into its category folder (read `category:` from its frontmatter) before archiving — say what was moved.
 
-- `<YYYY-MM-DD>` is today's date
-- `<issue-id>` is e.g. `VN-742`
-- `<lesson-slug>` is a kebab-case derivative of the lesson title
+**Dedupe before writing.** For each lesson in `evaluation/lessons.md`, scan the existing archive (titles in `INDEX.md` + frontmatter of files in the same category) for a lesson making the same point. Judge by meaning, not string match.
+
+- **New lesson** → create `.dev-assistant/lessons/<category>/<YYYY-MM-DD>-<issue-id>-<lesson-slug>.md`.
+- **Recurrence of an existing lesson** → do NOT create a new file. Update the existing one: append a row to its `## Recurrences` section (`<date> — <issue-id> — <one line on how it showed up>`) and bump `recurrences:` in its frontmatter. A lesson that keeps recurring is the strongest promotion candidate there is — flip `promotion_candidate: true` at 2+ recurrences if not already set.
 
 The individual file mirrors the per-issue lesson section, with extra frontmatter for retrieval:
 
@@ -424,6 +451,7 @@ source_issue: <issue-id>
 issue_title: <from issue.md>
 category: process | technical | collaboration
 promotion_candidate: <true | false>
+recurrences: <n>            # 0 for a first occurrence
 archived_at: <ISO timestamp>
 pr_url: <url or null>
 pr_state: <state>
@@ -437,17 +465,44 @@ pr_state: <state>
 ## What to do differently
 ...
 
+## Recurrences
+
+(Empty for a first occurrence. One line per later sighting: `<YYYY-MM-DD> — <issue-id> — <how it showed up>`.)
+
 ## Context
 - Issue: <id> — <title>
 - PR: <url> (<state>)
 - Related artifacts: `.dev-assistant/issues/<id>/evaluation/`
 ```
 
-If a file with the same name already exists (re-run case), overwrite it — the per-issue lessons.md is the source of truth.
+If a file with the same name already exists (same-issue re-run case), overwrite it — the per-issue lessons.md is the source of truth.
 
-`mkdir -p .dev-assistant/lessons/` if needed.
+**Regenerate `INDEX.md`** from the files on disk (never hand-maintained; a full rebuild each run keeps it honest):
 
-Report: *"Archived <K> lessons to `.dev-assistant/lessons/` (<P> flagged as promotion candidates)."*
+```markdown
+# Lessons index
+
+Regenerated by /dev-evaluate on <date>. <N> lessons (<P> promotion candidates, <R> with recurrences).
+
+## Promotion candidates
+
+| Lesson | Category | Source issue | Recurrences |
+|---|---|---|---|
+| [<title>](<category>/<file>.md) | technical | VN-742 | 2 |
+
+## process
+| Date | Issue | Lesson | Recurs |
+|---|---|---|---|
+| 2026-07-08 | VN-788 | [<title>](process/<file>.md) | — |
+
+## technical
+...
+
+## collaboration
+...
+```
+
+Report: *"Archived <K> lessons (<new> new, <merged> merged into existing as recurrences) to `.dev-assistant/lessons/` — <P> promotion candidates. Index rebuilt."*
 
 ### 5.3 — Write the evaluation report
 
@@ -460,6 +515,7 @@ phase: evaluation
 status: complete | partial
 completed_at: <ISO timestamp>
 pr_state_at_evaluation: <state>
+remote_state_verified: <true | discrepancies listed in retro.md>
 external_ops:
   gh_comment: <posted | already_done | skipped | failed | n/a>
   jira_subtasks: <transitioned: N, already_done: M, skipped: P, failed: Q>
@@ -479,7 +535,7 @@ What fired, what was already done, what was skipped, what failed.
 
 ## Where lessons live
 - Per-issue: `.dev-assistant/issues/<id>/evaluation/lessons.md`
-- Repo-wide: `.dev-assistant/lessons/<YYYY-MM-DD>-<id>-*.md` (<count> files)
+- Repo-wide: `.dev-assistant/lessons/<category>/<YYYY-MM-DD>-<id>-*.md` (<new> new, <merged> merged as recurrences) — see `.dev-assistant/lessons/INDEX.md`
 
 ## Suggested follow-up tickets
 Lifted from `retro.md`. User to file manually.

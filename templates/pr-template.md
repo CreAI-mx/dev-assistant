@@ -45,6 +45,16 @@ Focus on WHY and WHAT, not HOW. The diff shows the HOW.>
 
 <Deployment, security, or testing considerations the reviewer should know.
 Leave blank if there are none — don't fill with "N/A".>
+
+## Commit map
+
+<Reviewer aid, appended at execute wrap-up: one row per commit, grouped by
+subtask, linking each commit to its Jira subtask so the PR can be reviewed
+commit-by-commit. /dev-feedback appends a row per review-fix commit.>
+
+| Commit | Subtask | Jira | What it does |
+|---|---|---|---|
+| <short-sha> | 01 — <subtask title> | <JIRA-KEY or —> | <commit subject> |
 ```
 
 ## Style for the description bullets

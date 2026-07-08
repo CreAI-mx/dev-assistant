@@ -146,12 +146,13 @@ For each subtask, produce:
 Now propose the full picture:
 
 - **Dependency graph**: for each subtask, set `depends_on: [<ids>]`. Default linear (subtask N depends on N-1). Mark any safe parallels (`depends_on: []` when truly independent) — useful metadata for future fan-out, even though `/dev-execute` is per-subtask serial. Dependencies are between subtasks, not between commits within a subtask.
-- **Branch slug**: `feat/$ARGUMENTS-<short-slug>` where `<short-slug>` is 2–4 kebab-case words derived from the issue purpose. Keep it short and specific.
-- **Branching mode**: propose `single-branch` or `sub-branches` per the criteria in the decomposition model, with a one-line rationale (e.g. "total estimate is 9 commits and subtasks 02–04 are independent — recommend `sub-branches`"). The user decides; record the outcome.
-- **Target branch**: always `develop` per the branching strategy — `/dev-execute` branches off `origin/develop` and the feature PR targets `develop`. No resolution needed here.
+- **Flow**: `feature` (default) or `hotfix`. Hotfix is for emergency fixes that must reach UAT before the next normal deploy — the ticket usually says so explicitly; when in doubt, it's a feature. Choosing `hotfix` forces: branch pattern `hotfix/$ARGUMENTS-<slug>`, base + target branch `uat`, `single-branch` mode, 1–2 subtasks, `fix`-type commits, and a second sync PR → `develop` at the end (opened at execute wrap-up, merged by `/dev-merge` — per the branching strategy, every hotfix needs two PRs or the branches drift). Record as `flow` in frontmatter.
+- **Branch slug**: `feat/$ARGUMENTS-<short-slug>` (`hotfix/$ARGUMENTS-<short-slug>` in the hotfix flow) where `<short-slug>` is 2–4 kebab-case words derived from the issue purpose. Keep it short and specific.
+- **Branching mode**: propose `single-branch` or `sub-branches` per the criteria in the decomposition model, with a one-line rationale (e.g. "total estimate is 9 commits and subtasks 02–04 are independent — recommend `sub-branches`"). The user decides; record the outcome. (Hotfix flow: always `single-branch`.)
+- **Target branch**: resolved from the loaded branching strategy — never assumed. In the default strategy that means `develop` for the feature flow and `uat` for the hotfix flow; if the per-repo strategy override names different long-lived branches, use those. State where the value came from (which strategy document, which section). Record as `target_branch` in frontmatter — `/dev-execute` reads it from there and verifies it exists on `origin` before branching.
 - **Coverage map**: a table showing which subtasks cover which objectives. Mechanical check — confirm every specific objective is covered.
 
-Present all five to the user.
+Present all six to the user.
 
 **Pause for user input.** They may redirect on order ("3 must come before 2"), slug ("call it `oauth-flow`, not `add-oauth-flow`"), or coverage gaps.
 
@@ -168,8 +169,9 @@ The final rigor pass + write.
 - No subtask has more than 3 commits (`commits` field ≤3)
 - Total commits across all subtasks ≤10 (backstop against giant PRs) — **waived in `sub-branches` mode** (each sub-PR is ≤3 commits by construction); a total above 10 in `single-branch` mode is instead a prompt to switch to `sub-branches` or split the issue
 - Each commit's `type` is in the branching strategy's allowed types
-- Commit types match branch purpose (on a `feat/` branch, no `fix` unless the issue is bug-driven)
-- Branch slug matches the strategy's pattern (`feat/<TICKET>-<slug>`)
+- Commit types match branch purpose (on a `feat/` branch, no `fix` unless the issue is bug-driven; on a `hotfix/` branch, predominantly `fix`)
+- Branch slug matches the strategy's pattern for the chosen flow (`feat/<TICKET>-<slug>`, or `hotfix/<TICKET>-<slug>` for hotfixes)
+- Hotfix flow: `branching_mode` is `single-branch`, subtask count is 1–2, `target_branch` is the strategy's UAT branch
 
 If any mechanical check fails, loop back to whichever sub-stage needs to change (2 for decomposition, 3 for spec, 4 for sequencing).
 
@@ -229,9 +231,10 @@ Things to keep an eye on during execution. Open uncertainties that may force rep
 issue: $ARGUMENTS
 phase: plan
 status: complete
-proposed_branch: feat/$ARGUMENTS-<slug>
+flow: <feature | hotfix>
+proposed_branch: <feat | hotfix>/$ARGUMENTS-<slug>
 branching_mode: <single-branch | sub-branches>
-target_branch: develop
+target_branch: <develop | uat | per-repo override>
 total_subtasks: <n>
 total_commits: <sum of commits across subtasks>
 ---
@@ -242,9 +245,10 @@ See [report.md](./report.md) for the planning process, alternatives, and viabili
 
 ## Branch info (proposed — `/dev-execute` creates the branches)
 
-- **Feature branch**: `feat/$ARGUMENTS-<slug>` (off `develop`)
-- **Branching mode**: `single-branch` (subtasks land as commits on the feature branch; draft PR → `develop` at start, marked Ready at wrap-up) or `sub-branches` (each subtask gets `feat/$ARGUMENTS-<slug>-sub-N` off the feature branch with its own sub-PR at completion; parent draft PR → `develop` at start, marked Ready at wrap-up)
-- **Target branch**: `develop` (`/dev-execute` branches off `origin/develop`; the feature PR targets `develop`)
+- **Flow**: `feature` (normal work targeting the integration branch) or `hotfix` (emergency fix off `uat`, plus a sync PR → `develop` at the end)
+- **Feature branch**: `feat/$ARGUMENTS-<slug>` (off the target branch) — `hotfix/$ARGUMENTS-<slug>` in the hotfix flow
+- **Branching mode**: `single-branch` (subtasks land as commits on the feature branch; draft PR → target at start, marked Ready at wrap-up) or `sub-branches` (each subtask gets `feat/$ARGUMENTS-<slug>-sub-N` off the feature branch with its own sub-PR at completion; parent draft PR → target at start, marked Ready at wrap-up)
+- **Target branch**: `<target_branch>`, resolved from the branching strategy (`<which document/section it came from>`). `/dev-execute` verifies it exists on `origin` before branching and every branch/rebase/PR operation uses it — nothing downstream hardcodes `develop`.
 - **GitHub issue**: not yet created — `/dev-execute` creates it on the first subtask. One GH issue per Jira parent ticket, regardless of branching mode (Jira subtasks never get their own GH issue)
 
 ## Coverage map

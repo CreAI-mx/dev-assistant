@@ -12,6 +12,10 @@ Examples:
 
 Capitalized. Imperative verb up front. No trailing period. The bracketed ticket prefix makes the GH issue list scannable alongside the Jira board.
 
+## Assignee
+
+Always create with `--assignee @me` — the issue is assigned to whoever is authenticated in `gh` at creation time. Never hardcode a username; the template is used by anyone running the phase.
+
 ## Body structure
 
 ```markdown

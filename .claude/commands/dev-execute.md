@@ -1,5 +1,5 @@
 ---
-description: Execute one subtask of an issue (or wrap up after all subtasks are done) — opens a draft PR to develop at start, writes code, verifies passing criteria, commits, opens the subtask's sub-PR in sub-branches mode, and at wrap-up marks the (parent) PR ready for review
+description: Execute one subtask of an issue (or wrap up after all subtasks are done) — opens a draft PR to the plan's target branch at start, writes code, verifies passing criteria, commits, opens the subtask's sub-PR in sub-branches mode, and at wrap-up marks the (parent) PR ready for review (hotfix flow adds the develop sync PR)
 argument-hint: <issue-id> [subtask-n | wrap-up]
 model: opus
 allowed-tools: Bash(dev-assistant:*), Bash(git:*), Bash(gh:*), Read, Write, Edit, Grep, Glob, Agent
@@ -19,22 +19,31 @@ Parse `$ARGUMENTS` accordingly at the start. The issue ID is the first whitespac
 
 ## Current state of the issue
 
-!`dev-assistant issue show --id $ARGUMENTS`
+!`dev-assistant issue show --id $1`
 
-(If `$ARGUMENTS` contains the subtask number or `wrap-up` token, the CLI may print a not-found error — that's fine, we'll work directly with the issue files below.)
+(`$1` is the issue ID alone — the subtask number / `wrap-up` token must never reach the CLI; it takes exactly one `--id` value.)
 
 ## Experimental mode
 
 Read `.dev-assistant/issues/<issue-id>/issue.md` and check for `experimental: true` in the frontmatter. If set, **experimental mode is active for this entire invocation**, which changes behavior in specific places (called out below). Summary of what experimental mode does:
 
 - **Sub-phase 1a** (external preparation): all prompts SKIPPED entirely. No Jira / GH ops attempted, no asking.
-- **Sub-phase 1b** (local branch): `git fetch origin` is SKIPPED. Branch is created from the current HEAD instead of from `origin/develop`. The empty "open draft pr" commit is also SKIPPED (its only purpose is to seed the draft PR, which experimental mode never opens).
+- **Sub-phase 1b** (local branch): `git fetch origin` is SKIPPED. Branch is created from the current HEAD instead of from `origin/<target_branch>`. The empty "open draft pr" commit is also SKIPPED (its only purpose is to seed the draft PR, which experimental mode never opens).
 - **Sub-phase 1c** (draft PR at start): never runs — no push, no PR.
 - **Branching mode**: forced to `single-branch` behavior regardless of `plan.md`'s `branching_mode` — sub-PRs can't open without external ops, so sub-branches would be pointless. Note this to the user if the plan says `sub-branches`.
 - **Sub-phase 3.8** (sub-PR): never runs (follows from the forced single-branch behavior).
 - **Sub-phase 4** (wrap-up): rebase, push, PR ready, and Jira comment are all SKIPPED. Wrap-up report and team message are still written locally.
 
 Surface "experimental mode active — external ops will be skipped" up front so the user knows what's happening.
+
+## Flow and target branch (read once, use everywhere)
+
+Read from `plan.md` frontmatter, with defaults for plans written before the fields existed:
+
+- **`flow`** — `feature` (default when missing) or `hotfix`. In the hotfix flow the branch is `hotfix/<TICKET>-<slug>`, base + target is the strategy's UAT branch, branching mode is forced `single-branch`, and wrap-up additionally opens a **sync PR → `develop`** (sub-phase 4.5b) — per the branching strategy, every hotfix needs two PRs.
+- **`target_branch`** — the base and PR target for this issue (default `develop` when missing). **Every** branch, rebase, and PR operation below uses `<target_branch>` — the literal `develop` in examples means "the resolved target branch"; never hardcode it.
+
+Surface both up front: *"Flow: feature · target branch: `develop` (from plan.md)."*
 
 ## Strategies that shape this phase
 
@@ -109,13 +118,13 @@ Otherwise, for the current subtask `N`:
 
 1. **Check issue-level state in `plan.md`:** has the GitHub issue been created? (`gh_issue_created` field)
    - If **no** and this is the first subtask being executed: ask the user *"Create the GitHub issue for `<issue-id>` now? (y/n, default n)"*.
-   - On yes: build the issue body from `gh-issue-template`, populated with content from `gathering/objectives.md` + `plan/plan.md`. **CONFIRM the proposed title + body with the user before calling `gh issue create`.** On success, record `gh_issue_created: true` and `gh_issue_number: <num>` in `plan.md` frontmatter.
+   - On yes: build the issue body from `gh-issue-template`, populated with content from `gathering/objectives.md` + `plan/plan.md`. **CONFIRM the proposed title + body with the user before calling `gh issue create`.** Create with `--assignee @me` so the issue is assigned to whoever is authenticated in `gh` — never a hardcoded username. On success, record `gh_issue_created: true` and `gh_issue_number: <num>` in `plan.md` frontmatter.
    - On no: skip and continue. Will be offered again at wrap-up.
 
 2. **Check subtask-level state:** has subtask `N`'s Jira subtask been pushed? (`jira_pushed` field in the subtask)
    - If **no**: ask *"Create Jira subtask for subtask `N` (`<title>`) now? (y/n, default n)"*.
    - On yes: check whether Atlassian MCP tools are available in this Claude Code session.
-     - If yes: build the description from `jira-subtask-template`, populated with the subtask spec. **CONFIRM the proposed summary + description with the user before creating.** On success, record `jira_pushed: true`, `jira_subtask_key: <key>`, `jira_description_populated: true` in the subtask frontmatter.
+     - If yes: build the description from `jira-subtask-template`, populated with the subtask spec. Resolve the current Jira user via the Atlassian MCP (`atlassianUserInfo`) and set the subtask's **assignee** to that account ID — always the authenticated user running the phase, never a hardcoded name. **CONFIRM the proposed summary + description (and the assignee) with the user before creating.** On success, record `jira_pushed: true`, `jira_subtask_key: <key>`, `jira_description_populated: true` in the subtask frontmatter.
      - If no: tell the user "Atlassian MCP not available in this session — skipping Jira subtask creation. Push manually if needed." Skip without erroring.
    - On no: skip and continue. Will be offered again at wrap-up.
 
@@ -129,18 +138,21 @@ Local-only ops. **No user confirmation needed.** Just do it and report.
 
 Read `branching_mode` from `plan.md` frontmatter. Treat a missing field as `single-branch` (plans written before the field existed). In experimental mode, force `single-branch` behavior regardless of the plan.
 
-**Pre-flight:** verify the working tree is clean. If dirty, stop and tell the user *"Working tree has uncommitted changes. Commit, stash, or discard them before running execute."*
+**Pre-flight:** verify all of, and stop on the first failure:
+
+- Working tree is clean. If dirty: *"Working tree has uncommitted changes. Commit, stash, or discard them before running execute."*
+- (Normal mode, first subtask only) the target branch actually exists on the remote: `git ls-remote --heads origin <target_branch>` returns a ref. If not: *"`origin/<target_branch>` does not exist — the plan's `target_branch` doesn't match this repo's branches. Fix `plan.md` or the per-repo branching strategy first."* Don't silently fall back to another branch.
 
 **If `plan.md` frontmatter has `branch_created: false`** (this is the first subtask being executed for this issue):
 
 - **In experimental mode:** branch from current HEAD. Record the base commit SHA. No empty commit (sub-phase 1c never runs).
-  - `git checkout -b feat/<TICKET>-<slug>` (slug from `plan.md`'s `proposed_branch` field)
-- **In normal mode:** branch from `origin/develop`.
+  - `git checkout -b <proposed_branch>` (the full branch name from `plan.md`'s `proposed_branch` field — `feat/<TICKET>-<slug>`, or `hotfix/<TICKET>-<slug>` in the hotfix flow)
+- **In normal mode:** branch from `origin/<target_branch>`.
   - `git fetch origin`
-  - `git checkout -b feat/<TICKET>-<slug> origin/develop`
-  - **Empty "open draft pr" commit** — the branch needs a commit that diverges from `develop` before sub-phase 1c can open a draft PR. Make it now, before any feature code:
-    - `git commit --allow-empty -m "chore: open draft pr feat/<TICKET>-<slug>"` (pass via HEREDOC if your shell needs it)
-- Record `branch_created: true`, `branch_name: feat/<TICKET>-<slug>`, `branch_base: <develop or HEAD>` in `plan.md` frontmatter.
+  - `git checkout -b <proposed_branch> origin/<target_branch>`
+  - **Empty "open draft pr" commit** — the branch needs a commit that diverges from the target branch before sub-phase 1c can open a draft PR. Make it now, before any feature code:
+    - `git commit --allow-empty -m "chore: open draft pr <proposed_branch>"` (pass via HEREDOC if your shell needs it)
+- Record `branch_created: true`, `branch_name: <proposed_branch>`, `branch_base: <target_branch or HEAD>` in `plan.md` frontmatter.
 - **In `sub-branches` mode, additionally:** create the first subtask's sub-branch off the parent just created: `git checkout -b feat/<TICKET>-<slug>-sub-<N>`. Record `sub_branch: feat/<TICKET>-<slug>-sub-<N>` in subtask `N`'s frontmatter in `plan.md`. (The empty commit lives on the parent branch; sub-branches inherit it as their base.)
 
 **Otherwise** (the parent feat branch already exists for this issue):
@@ -162,11 +174,11 @@ Report (mode-dependent): "On `feat/VN-742-oauth-flow` (created from `develop`, e
 
 Per the branching strategy, work starts by opening a **Draft PR** before writing feature code — it's the start-of-work signal. This runs only when the parent branch was just created in 1b (`branch_created` flipped to true this invocation) and `pr_url` is not yet set. Skip entirely in experimental mode (no external ops). Skip if a `pr_url` is already recorded (re-entry).
 
-In `sub-branches` mode this opens the **parent** feature branch's draft PR → `develop`. The empty commit is what gives it a base; sub-PRs still target the parent feature branch (sub-phase 3.8), not `develop`.
+In `sub-branches` mode this opens the **parent** feature branch's draft PR → `<target_branch>`. The empty commit is what gives it a base; sub-PRs still target the parent feature branch (sub-phase 3.8), not `<target_branch>`.
 
 1. **Push the feature branch (CONFIRM):** *"About to push `<branch_name>` to origin to open its draft PR. Proceed?"* — `git push -u origin <branch_name>`. (In `sub-branches` mode this is the parent branch; check out the parent first if currently on the sub-branch, then return to the sub-branch after.)
-2. **Open the draft PR (CONFIRM):** build title + body from `pr-template`, populated with the issue objectives from `gathering/objectives.md` + planned subtasks from `plan.md` (the work isn't done yet, so frame it as scope/plan, not results). Link the GH issue if `gh_issue_created`. **Display the proposed title + body. Ask: "Open this draft PR? Target: `develop`. Proceed?"** On confirm: `gh pr create --draft --base develop --head <branch_name> --title ... --body ...`. Record `pr_url: <url>` and `pr_state: draft` in `plan.md` frontmatter.
-3. **Comment on the Jira parent (optional, CONFIRM):** only if Atlassian MCP is available and the parent ticket is known — short comment per `comment-style`, e.g. `"Draft PR opened: <url>. Targets develop. Work in progress."`
+2. **Open the draft PR (CONFIRM):** build title + body from `pr-template`, populated with the issue objectives from `gathering/objectives.md` + planned subtasks from `plan.md` (the work isn't done yet, so frame it as scope/plan, not results). Link the GH issue if `gh_issue_created`. Before creating, verify the base: the target in the create command must be exactly `plan.md`'s `target_branch`. **Display the proposed title + body. Ask: "Open this draft PR? Target: `<target_branch>`. Proceed?"** On confirm: `gh pr create --draft --base <target_branch> --head <branch_name> --title ... --body ...`. Then verify what was actually created — `gh pr view <url> --json baseRefName` matches `target_branch` (repo default-branch settings can silently redirect a base). Record `pr_url: <url>` and `pr_state: draft` in `plan.md` frontmatter.
+3. **Comment on the Jira parent (optional, CONFIRM):** only if Atlassian MCP is available and the parent ticket is known — short comment per `comment-style`, e.g. `"Draft PR opened: <url>. Targets <target_branch>. Work in progress."`
 
 Any step declined → continue without the draft PR (record whatever state was reached). The work can still proceed locally; sub-phase 4.5 will open the PR as Ready at wrap-up if no `pr_url` exists by then.
 
@@ -409,7 +421,7 @@ Verify:
 - All subtasks `status: done` in `plan.md`
 - Working tree clean (`git status` shows nothing)
 - Current branch matches `plan.md`'s `branch_name` — in `sub-branches` mode, check out the parent branch first if currently on a sub-branch (`git checkout <branch_name>`, then fast-forward to `origin/<branch_name>`)
-- In normal mode: `origin/develop` exists (will be needed for rebase)
+- In normal mode: `origin/<target_branch>` exists (will be needed for rebase), verified via `git ls-remote --heads origin <target_branch>`
 - **In `sub-branches` mode additionally:** every subtask has a `sub_pr_url` and every sub-PR is **merged** (`gh pr view <url> --json state,merged` per subtask). If any are missing or still open, stop and list them: *"Sub-PRs not merged: subtask 2 (<url>, OPEN), subtask 4 (no sub-PR). Merge them into `<branch_name>` first, then re-invoke wrap-up."*
 
 If any fail → stop with a clear message. No external ops attempted.
@@ -434,9 +446,9 @@ In experimental mode, skip rebase entirely.
 Otherwise:
 
 - `git fetch origin`
-- `git rebase origin/develop`
+- `git rebase origin/<target_branch>`
 - If the rebase has conflicts → **hard stop**. List conflicting files. Tell the user: *"Rebase has conflicts. Resolve them manually (`git rebase --continue` after fixing), then re-invoke `/dev-execute <issue-id> wrap-up`."*
-- If clean → report "Rebased onto `develop` (no conflicts)."
+- If clean → report "Rebased onto `<target_branch>` (no conflicts)."
 
 ### 4.4 — Push (skipped in experimental mode; otherwise CONFIRM)
 
@@ -455,19 +467,42 @@ In experimental mode, skip entirely.
 
 The draft PR was normally opened at sub-phase 1c. Wrap-up refreshes its body and converts it to Ready. Build the PR body from `pr-template`, now populated with the finished work: subtask summaries, the GH issue link (if `gh_issue_created`), and commit references. In `sub-branches` mode, include a "Sub-PRs" section listing each subtask's merged sub-PR (`#num — title`) so reviewers know the pieces were already reviewed individually.
 
+**Commit map (reviewer aid — always include):** append a `## Commit map` section to the PR body — one table row per commit, grouped by subtask, so a reviewer can review commit-by-commit and trace each one back to its Jira subtask:
+
+```markdown
+## Commit map
+
+| Commit | Subtask | Jira | What it does |
+|---|---|---|---|
+| <short-sha> | 01 — <subtask title> | <jira_subtask_key or —> | <commit subject> |
+| <short-sha> | 01 — <subtask title> | <jira_subtask_key or —> | <commit subject> |
+| <short-sha> | 02 — <subtask title> | <jira_subtask_key or —> | <commit subject> |
+```
+
+Source the rows from each subtask's `execution-notes.md` (`commit_shas` + subjects) and `plan.md`'s per-subtask `jira_subtask_key`. Fixes from later feedback rounds aren't known yet — `/dev-feedback` appends its commits to this same table. Use the pushed SHAs (post-rebase), not stale pre-rebase ones.
+
 **If `pr_url` is already set** (the normal case — draft opened at start):
 
-- **Display the refreshed body. Ask user: "Update PR body and mark `<pr_url>` ready for review? Target: `develop`. Proceed?"**
+- **Display the refreshed body. Ask user: "Update PR body and mark `<pr_url>` ready for review? Target: `<target_branch>`. Proceed?"**
 - On confirm: `gh pr edit <pr_url> --body "<body>"` then `gh pr ready <pr_url>`. Update `pr_state: ready` in `plan.md`.
 - On decline: stop wrap-up. The PR stays as a draft; the user can mark it ready manually.
 
 **If `pr_url` is not set** (1c was declined or this is an old single-branch plan): open the PR fresh as Ready.
 
-- **Display the proposed title + body. Ask user: "Open this PR? Target: `develop`. Proceed?"**
-- On confirm: `gh pr create --title "<title>" --body "<body>" --base develop`. Capture the returned URL; record `pr_url` and `pr_state: ready`.
+- **Display the proposed title + body. Ask user: "Open this PR? Target: `<target_branch>`. Proceed?"**
+- On confirm: `gh pr create --title "<title>" --body "<body>" --base <target_branch>`. Capture the returned URL; verify `baseRefName` matches `target_branch`; record `pr_url` and `pr_state: ready`.
 - On decline: stop wrap-up. PR can be opened manually later.
 
 Report: "PR ready: `<url>`" (or "PR opened (ready): `<url>`" in the fresh-open case).
+
+### 4.5b — Hotfix sync PR (hotfix flow only; CONFIRM)
+
+Per the branching strategy, every hotfix needs **two PRs** — the one just marked ready (→ `uat`) and a sync PR → `develop`, or the branches drift out of sync. Only runs when `flow: hotfix`.
+
+- Build the sync PR from the same branch: title `[<TICKET>] <summary> (sync to develop)`, body pointing at the primary PR (`Sync of <pr_url> — see it for review context and the commit map.`).
+- **Display it. Ask: "Open the develop sync PR? Target: `develop`. Proceed?"** On confirm: `gh pr create --base develop --head <branch_name> --title ... --body ...`. Record `develop_pr_url` in `plan.md` frontmatter.
+- On decline: continue wrap-up, but record `develop_pr_url: null` and warn — *"No sync PR: the fix will be lost from `develop` on the next promotion unless one is opened before `/dev-merge`."* `/dev-merge` re-checks this.
+- If `uat` and `develop` have diverged so far that the same branch can't cleanly target both, surface it and fall back to the strategy's cherry-pick guidance (manual for now).
 
 ### 4.6 — Comment on Jira parent (skipped in experimental mode; otherwise CONFIRM)
 
@@ -475,7 +510,7 @@ In experimental mode, skip Jira comment entirely.
 
 Otherwise (and only if Atlassian MCP is available):
 
-- Build the comment from `comment-style` strategy — short, e.g. `"PR ready for review: <PR URL>\nTargets develop. Awaiting review."`
+- Build the comment from `comment-style` strategy — short, e.g. `"PR ready for review: <PR URL>\nTargets <target_branch>. Awaiting review."` (hotfix flow: mention the sync PR too)
 - **Display the comment. Ask user: "Post this comment on Jira `<issue-id>`? Proceed?"**
 - On confirm: post via Atlassian MCP.
 - On decline: skip. User can comment manually.
@@ -489,7 +524,7 @@ Build the Spanish team message from `team-update-template`, populated with:
 - PR URL (or "[PR not opened]" in experimental mode)
 - Issue ticket and title
 - 2–3 bullets summarizing what changed (derived from subtask titles and commit messages)
-- Target branch (`develop`)
+- Target branch (`<target_branch>`; in the hotfix flow mention both PRs)
 
 Write it to `.dev-assistant/issues/<issue-id>/execution/team-message.txt`.
 
@@ -551,11 +586,11 @@ Terse summary to the user:
 ```
 Wrap-up complete for <issue-id>.
 - N subtasks, M commits
-- PR: <url or "not opened">
+- PR: <url or "not opened">   (hotfix flow: also the develop sync PR, or the warning that it's missing)
 - Team message ready at .dev-assistant/issues/<issue-id>/execution/team-message.txt (and shown above for copy)
 - Wrap-up report at .dev-assistant/issues/<issue-id>/execution/wrap-up-report.md
 
-Next: /dev-evaluate <issue-id> (not yet implemented).
+Next: /dev-feedback <issue-id> for each review round → /dev-merge <issue-id> once approved → /dev-evaluate <issue-id>.
 ```
 
 ---

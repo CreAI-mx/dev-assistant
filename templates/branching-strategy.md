@@ -67,7 +67,7 @@ Pass via HEREDOC to preserve newlines.
 1. **Never commit directly to `develop` or `uat`.** All changes go through a PR. No exceptions.
 2. **1 Jira ticket = 1 Draft PR.** Open it when you start, not when you finish. Link the Jira ticket in the description. This refers to the **parent** ticket: Jira subtasks live under it and never get their own GitHub issue or top-level PR — at most they get a sub-branch and sub-PR off the parent `feat/` branch, all referencing the same parent ticket.
 3. **Pull from `develop` before branching.** Never start work from a stale base.
-4. **Rebase, not merge, before review.** Push with `--force-with-lease` after rebasing. Linear history is mandatory.
+4. **Rebase, not merge, before review.** Push with `--force-with-lease` after rebasing. History within the branch is linear; integration into `develop` happens via merge commit (rule 12).
 5. **Commit type must match branch purpose.** A `feat/` branch carries `feat | refactor | test | chore | docs` commits — and `fix` only when the branch is bug-driven.
 6. **Single-repo features go straight to `develop`.** No version branch needed.
 7. **Multi-repo features use the `--xrepo` suffix.** Same branch name across repos; the feature owner coordinates merge timing and keeps the partial-state window short.
@@ -75,6 +75,7 @@ Pass via HEREDOC to preserve newlines.
 9. **Delete branches after merge.** Stale branches are noise.
 10. **Version tags carry semantic meaning.** Cut the tag that's semantically accurate (PATCH for a fixes-only sprint), not the convenient one.
 11. **Infrastructure changes require a Slack tag.** Any PR touching infrastructure — secrets, env vars, service config — must tag the infra owner in the Slack PR review channel before deployment.
+12. **PRs merge with a merge commit, never squash or rebase-merge.** Commit SHAs are referenced throughout the process (Jira comments, review replies, execution notes, PR bodies); squashing orphans every one of those references. The merge commit subject is `[<TICKET>] <imperative summary> (#<PR number>)` so the PR stays trackable from `git log` and GitHub autolinks it.
 
 ## Step-by-step workflow
 
@@ -134,9 +135,21 @@ git push --force-with-lease origin feat/<TICKET>-<slug>
 
 Convert the Draft PR to Ready once CI is green and the work is complete. Don't open a draft and forget to convert it. Feature PR target = `develop`. Requires at least 1 approval + CI green.
 
-### 6. After approval, merge and delete
+### 6. After approval, merge with a merge commit and delete
 
-The feature branch is deleted after merge. The PO can review the feature in `develop` as soon as the PR merges.
+Merge with a **merge commit** (`gh pr merge --merge`), never squash or rebase-merge (rule 12). Set the merge commit subject explicitly — GitHub's default (`Merge pull request #N from ...`) says nothing about the change:
+
+```
+[<TICKET>] <imperative summary, no trailing period> (#<PR number>)
+```
+
+The `(#N)` suffix is what makes GitHub autolink the commit back to its PR. The body carries 2–3 outcome bullets plus `refs <TICKET>`.
+
+```bash
+gh pr merge <pr> --merge --subject "[<TICKET>] <summary> (#<N>)" --body "<bullets + refs>"
+```
+
+The feature branch is deleted after merge (remote and local). The PO can review the feature in `develop` as soon as the PR merges. In dev-assistant, `/dev-merge` drives this step — including the readiness checks before the merge fires.
 
 ## Cross-repo features (`--xrepo`)
 
@@ -188,6 +201,7 @@ The tag is the release artifact; the branch is just the delivery mechanism. Not 
 | Feature too big for one PR | Use sub-branches — Step 3 |
 | Ready to push | Rebase first, then push — Step 5 |
 | Work complete + CI green | Mark the Draft PR Ready — Step 5 |
+| PR approved + CI green | Merge with a merge commit, subject `[<TICKET>] <summary> (#<PR>)` — Step 6 (`/dev-merge`) |
 | Not sure which branch to branch from | Feature branches come from `develop`. Sub-branches come from the parent feature branch. Hotfixes from `uat`. |
 | Fixing a bug | Same flow as a feature, but use `fix` as the commit type |
 | Emergency fix broken in UAT | Hotfix flow — branch off `uat`, two PRs (`uat` + `develop`) |
