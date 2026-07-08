@@ -9,7 +9,7 @@
 
 An AI-powered developer assistant. Standardizes how dev work moves through five stages: **gather → plan → execute → feedback → evaluate**, with an optional **refine** phase 0 for tickets that arrive too thin. Two layers: a Python CLI for deterministic helpers, and Claude Code slash commands that drive the reasoning per phase.
 
-See [DESIGN.md](DESIGN.md) for the architecture and rationale, and [IDEAS.md](IDEAS.md) for the deferred / next-up list.
+**New here? Start with the [User guide](docs/user-guide.md)** — setup, a safe experimental-mode dry run, the full lifecycle walkthrough, concepts, and troubleshooting. See [DESIGN.md](DESIGN.md) for the architecture and rationale, and [IDEAS.md](IDEAS.md) for the deferred / next-up list.
 
 ## Quick start
 
@@ -35,16 +35,20 @@ Then in Claude Code, walk the phases:
                          # (in sub-branches mode, each subtask opens its own sub-PR)
 /dev-feedback PROJ-123   # one round of PR review iteration per invocation
                          # (add a subtask number to target that subtask's sub-PR)
+/dev-merge PROJ-123      # close the review phase: readiness checks, merge commit
+                         # titled "[TICKET] ... (#PR)", branch cleanup
 /dev-evaluate PROJ-123   # retro + lessons + close out externally
 ```
 
-For experimental / sandbox work, add `--experimental` at `issue create` time to skip all external operations (no Jira, no GitHub, no PR).
+For experimental / sandbox work, add `--experimental` at `issue create` time to skip all external operations (no Jira, no GitHub, no PR) — this is also the recommended way to [try the workflow for the first time](docs/user-guide.md#4-try-it-first-with-experimental-mode-no-remote-changes).
+
+Full walkthrough of every phase — what you're asked, what lands on disk — in the [User guide](docs/user-guide.md#5-the-lifecycle-end-to-end).
 
 `init` adds `.dev-assistant/` to the target repo's `.git/info/exclude` so the workspace folder is never committed.
 
 ## How it works
 
-Six phase commands (refine is optional), each producing artifacts under `.dev-assistant/issues/<id>/`:
+Seven phase commands (refine is optional), each producing artifacts under `.dev-assistant/issues/<id>/`:
 
 | Phase | Slash command | Primary outputs |
 |---|---|---|
@@ -53,7 +57,8 @@ Six phase commands (refine is optional), each producing artifacts under `.dev-as
 | Plan | `/dev-plan` | `plan/plan.md`, `plan/report.md` |
 | Execute | `/dev-execute` | Code commits, PR (one subtask per invocation, then wrap-up). Big issues can opt into **sub-branches mode** at plan time: one sub-branch + sub-PR per subtask, parent PR at wrap-up |
 | Feedback | `/dev-feedback` | One round of PR review iteration per invocation (main PR or a subtask's sub-PR) |
-| Evaluate | `/dev-evaluate` | Retro + lessons + close-out + optional non-destructive archive |
+| Merge | `/dev-merge` | Explicit close of the review phase: merge-readiness checks against live GitHub state, merge **commit** (subject `[TICKET] … (#PR)` — squash is never used, so commit SHAs referenced in artifacts stay valid), branch cleanup, `merge/report.md`. Hotfix issues walk both PRs (`uat`, then the `develop` sync) |
+| Evaluate | `/dev-evaluate` | Retro + lessons (categorized, deduplicated, indexed under `.dev-assistant/lessons/`) + close-out + optional non-destructive archive |
 
 Customizable per repo via `dev-assistant strategies customize <name>` for branching, PR template, comment style, etc. Repo-owned rules documents are pointed at via `.dev-assistant/repo-context.md` and re-read on every phase invocation so the source of truth stays in the target repo.
 

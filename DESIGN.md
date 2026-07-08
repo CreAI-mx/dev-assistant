@@ -42,7 +42,7 @@ Experimental. Single-user. Local-only. No distribution planned yet.
 1. **Gather information** — pull context from meetings, repo state, Slack, conversations into one structured document.
 2. **Plan** — produce a main issue with subtasks (linear, parallel, or delegated).
 3. **Execute** — work through subtasks, following the repo's coding standards. Creates the GitHub issue at this point (distinct from the workspace-issue that exists locally).
-4. **Feedback during execution** — share updates, get PR feedback, iterate.
+4. **Feedback during execution** — share updates, get PR feedback, iterate. Closed out by an explicit **merge** step (`/dev-merge`, added in 0.6): readiness checks against live GitHub state, then a merge commit titled `[<TICKET>] <summary> (#<PR>)`.
 5. **Evaluate** — retro, distill lessons, close out.
 
 "Checking" is transversal — present at every stage, not its own stage.
@@ -116,6 +116,8 @@ After `dev-assistant issue create --id PROJ-123 --title "..."`:
 ├── gathering/          # gather phase output (objectives.md)
 ├── plan/               # plan phase output
 ├── execution/          # execution notes / decisions
+├── feedback/           # review rounds — created on demand by /dev-feedback
+├── merge/              # merge report — created on demand by /dev-merge
 └── evaluation/         # retro / lessons-to-promote
 ```
 
@@ -177,21 +179,214 @@ The CLI is the deterministic substrate. It does not implement phases (those are 
 
 ## Slash Command Surface
 
+One issue flows top-to-bottom through the author-side commands. Middle column: what each phase writes locally (under `.dev-assistant/issues/<id>/`). Right column: its external side effects — every one individually gated on user confirmation; experimental issues skip the entire right column.
+
+```
+                       local artifacts                     external side effects
+                       (.dev-assistant/issues/<id>/)       (each confirmed; none if experimental)
+
+   Jira ticket
+       │
+       ▼
+ ┌───────────────┐     refinement/report.md                Jira title + description
+ │  /dev-refine  │     (optional phase 0 — skip            rewritten (after approval)
+ └───────┬───────┘      when the ticket is solid)
+         ▼
+ ┌───────────────┐     gathering/report.md                 —
+ │  /dev-gather  │     gathering/objectives.md
+ └───────┬───────┘
+         ▼
+ ┌───────────────┐     plan/plan.md                        —
+ │  /dev-plan    │     plan/report.md                      (read-only on the world)
+ └───────┬───────┘
+         ▼
+ ┌───────────────┐     execution/<NN-slug>/…               GH issue (assigned) + Jira subtasks
+ │ /dev-execute  │◀─┐  execution/wrap-up-report.md         (assigned), push, draft PR at start;
+ └───────┬───────┘  │  execution/team-message.txt          at wrap-up: PR Ready + commit map
+         │──────────┘                                      (sub-branches: sub-PR per subtask)
+         │  one subtask per invocation, then wrap-up       (hotfix: + develop sync PR)
+         ▼
+ ┌───────────────┐     feedback/round-NN/                  fix commits pushed; replies posted
+ │ /dev-feedback │◀─┐  (pulled, triage, clusters,          as ONE reviewed batch; threads
+ └───────┬───────┘  │   report with remote-state check)    resolved; PR commit map updated
+         │──────────┘
+         │  one review round per invocation
+         ▼
+ ┌───────────────┐     merge/report.md                     merge commit "[TICKET] … (#PR)",
+ │  /dev-merge   │     (readiness checklist recorded)      branch deleted, Jira comment
+ └───────┬───────┘                                         (hotfix: uat PR, then develop PR)
+         ▼
+ ┌───────────────┐     evaluation/retro.md                 ONE batch, gated on PR state:
+ │ /dev-evaluate │     evaluation/lessons.md               GH closure comment + issue close,
+ └───────────────┘     …plus repo-wide                     Jira transitions
+                       lessons/<category>/… + INDEX.md
+
+ Standalone (reviewer side — you review someone else's PR; not a lifecycle phase):
+
+ ┌───────────────┐     reviews/pr-<n>/round-NN/            ONE GitHub review, submitted
+ │  /dev-review  │◀─┐  (context, understanding,            atomically; only user-selected
+ └───────────────┘  │   findings, comments, report)        findings are posted
+         │──────────┘
+            one round per invocation (round 02+ reviews only the delta)
+```
+
 ### Implemented
+
+Each command below carries a sub-phase diagram. Conventions: **(pause)** = stops and waits for the user's actual response, even in auto modes; **(CONFIRM)** = external operation, individually gated on explicit confirmation; "repeat" marks internal loops.
 
 - `/dev-refine <issue-id>` — optional phase 0, run when a ticket arrives too thin to gather against. Five announced sub-stages: **1 load** (fetch the ticket from Jira via Atlassian MCP, paste fallback; scaffold the issue workspace via `issue create` if it doesn't exist — refine is usually the first phase to touch a ticket), **2 exploration** (the heart: an intense conversation over the real ask, feasibility grounded in repo reads, 2–4 genuinely different candidate directions with trade-offs, scope edges, constraints — Claude is expected to contribute ideas, not just transcribe), **3 narrowing** (chosen direction + alternatives set aside with honest reasons + surviving open questions; "split this ticket" or "don't do it" are valid outcomes), **4 rewrite proposal** (new title + description side-by-side with the originals, iterated until explicit approval), **5 apply + report** (the ONLY external write of the phase: update Jira title/description after approval — skipped for experimental issues, manual-paste fallback without MCP; then sync local `issue.md`; then write `refinement/report.md` — deliberately allowed to be extensive, it is the only record of the exploration). The GH issue is untouched (still created at `/dev-execute`). `/dev-gather` consumes the report as its first source. Model: Opus.
 
+  ```
+  ┌─────────────────────┐
+  │ 1  load             │  fetch ticket from Jira (paste fallback) · scaffold workspace if missing
+  ├─────────────────────┤
+  │ 2  exploration      │  the real ask · feasibility from repo reads · 2–4 candidate directions (conversation)
+  ├─────────────────────┤
+  │ 3  narrowing        │  direction chosen — "split it" / "don't do it" are valid outcomes (pause)
+  ├─────────────────────┤
+  │ 4  rewrite proposal │  new title + description side-by-side with the original, iterated (pause: approval)
+  ├─────────────────────┤
+  │ 5  apply + report   │  Jira update (CONFIRM; skipped if experimental) → refinement/report.md
+  └─────────────────────┘
+  ```
+
 - `/dev-gather <issue-id>` — walks the gather phase in five announced sub-stages (source inventory → information collection per source → process objectives confirmation → draft issue objectives → validation and write). Produces **two artifacts**: a thinking artifact (`gathering/report.md`) preserving full source content + analysis, and a decision artifact (`gathering/objectives.md`) with distilled objectives that later phases consume.
+
+  ```
+  ┌──────────────────────────┐
+  │ 1  source inventory      │  refinement report · Jira · repo · meeting notes · direct input (pause: pick subset)
+  ├──────────────────────────┤
+  │ 2  information collection│  per chosen source; direct input = five fixed questions, one at a time (pause each)
+  ├──────────────────────────┤
+  │ 3  process objectives    │  confirm / trim the standard process expectations (pause)
+  ├──────────────────────────┤
+  │ 4  draft issue objectives│  general objective + 3–7 specific testable items · constraints · open questions
+  ├──────────────────────────┤
+  │ 5  validate + write      │  gathering/report.md (thinking) + gathering/objectives.md (decision) — no external ops
+  └──────────────────────────┘
+  ```
 
 - `/dev-plan <issue-id>` — walks the plan phase in five announced sub-stages (context load → decomposition proposal → subtask elaboration → sequencing and branch info → viability check and write). Produces **two artifacts**: a thinking artifact (`plan/report.md`) covering decomposition approach, sequencing rationale, alternatives considered, viability outcomes, and risks; and a decision artifact (`plan/plan.md`) with branch info (feature branch off `develop`, target `develop`), branching mode (`single-branch` default — one feat branch, draft PR → `develop` at start, marked Ready at wrap-up — or `sub-branches` — one `feat/<TICKET>-<slug>-sub-N` branch + sub-PR per subtask, parent draft PR marked Ready at wrap-up; chosen in sub-stage 4, recommended when the commit estimate runs past the 8–10 band), coverage map, dependency graph, and full subtask specs inline. Pure planning — no side effects (no GitHub issue, no branch, no commits, no PR). Model: Opus.
 
+  ```
+  ┌────────────────────────┐
+  │ 1  context load        │  objectives + strategies; "is this the right context to plan from?" (pause)
+  ├────────────────────────┤
+  │ 2  decomposition       │  2–5 subtasks proposed as a table, iterated with the user (pause)
+  ├────────────────────────┤
+  │ 3  subtask elaboration │  one at a time: spec · passing criteria · commit previews (pause per subtask)
+  ├────────────────────────┤
+  │ 4  sequencing + branch │  deps · slug · flow (feature|hotfix) · branching mode · target branch
+  │                        │  resolved from the branching strategy (pause)
+  ├────────────────────────┤
+  │ 5  viability + write   │  mechanical checks + conversational rubric → plan/plan.md + plan/report.md,
+  │                        │  then a final revision pass on the written files (pause)
+  └────────────────────────┘
+  ```
+
 - `/dev-execute <issue-id> [subtask-n | wrap-up]` — executes one subtask per invocation, or runs wrap-up after all subtasks are done. Four sub-phases per invocation: **1a external preparation** (optional, always-ask: create Jira subtask, populate description, create GH issue), **1b local branch preparation** (automatic, no confirm: fetch + branch-off-`develop` + an empty "open draft pr" commit, or branch-from-HEAD in experimental mode; in `sub-branches` mode also creates the subtask's `-sub-N` branch off the parent — starting a new subtask before the prior sub-PR merges offers wait-or-stack), **1c draft PR at start** (first subtask, non-experimental: push + open a draft PR → `develop`, each external op confirmed), **2 implementation plan** (orchestrator drafts, mechanical checks with up to 2 internal re-drafts, user approves / refines / abandons via a summary), **3 execute the work** (per-commit subagent dispatch with Sonnet, orchestrator reviews diff, commits with no `--no-verify`, verifies subtask-level passing criteria with one auto-fix retry; in `sub-branches` mode a 3.8 step then rebases onto the parent feature branch and opens the per-subtask sub-PR, each external op confirmed), then **4 wrap-up** at the end of all subtasks (rebase onto `develop`, push, mark the draft PR Ready — opening it fresh if 1c was declined — Jira comment, all individually confirmed; in `sub-branches` mode pre-flight requires all sub-PRs merged and the parent PR body lists them; team message generated locally in Spanish; wrap-up report written). Experimental mode (set via `issue create --experimental`) skips all external operations. Model: Opus orchestrator, Sonnet subagent for code writing.
+
+  ```
+  one subtask per invocation — repeat until all subtasks are done:
+  ┌─────────────────────┐
+  │ 1a external prep    │  GH issue (--assignee @me) · Jira subtask (assigned) — optional, each CONFIRM
+  ├─────────────────────┤
+  │ 1b branch prep      │  verify origin/<target_branch> exists · branch + empty commit (automatic, local)
+  ├─────────────────────┤
+  │ 1c draft PR         │  first subtask only: push (CONFIRM) → draft PR → <target_branch> (CONFIRM)
+  ├─────────────────────┤
+  │ 2  impl plan        │  draft → mechanical checks (≤2 redrafts) → summary (pause: approve/refine/abandon)
+  ├─────────────────────┤
+  │ 3  execute          │  repeat per commit: subagent writes → orchestrator reviews diff → commit;
+  │                     │  then verify passing criteria (1 auto-fix retry) · sub-branches: sub-PR (CONFIRM)
+  └─────────────────────┘
+  after the last subtask — wrap-up invocation:
+  ┌─────────────────────┐
+  │ 4  wrap-up          │  pre-flight → deferred-prep catch-up → rebase onto <target_branch> → push (CONFIRM)
+  │                     │  → PR body + commit map, mark Ready (CONFIRM) → hotfix: develop sync PR (CONFIRM)
+  │                     │  → Jira comment (CONFIRM) → team message (local) → wrap-up report
+  └─────────────────────┘
+  ```
 
 - `/dev-feedback <issue-id> [subtask-n]` — walks **one round** of the post-PR review loop, against the issue's main PR or (with the subtask argument, `sub-branches` mode only) a subtask's sub-PR. Re-invokable: each call processes only comments newer than the last round's pull timestamp; rounds are tracked per PR (`feedback/round-NN/` for the main PR, `feedback/sub-<N>/round-NN/` for a sub-PR). Five sub-phases per round: **1 pull** (fetch new comments from PR issue-comments + review-thread comments + review summaries, filtering own replies and resolved threads), **2 triage** (auto-classify each comment by severity `blocking-correctness | blocking-design | should-fix | nit | question | praise` and type `bug | security | design | perf | tests | style | docs | question | discussion`, cluster by file/area/concern, user reviews and can reclassify / defer / abandon), **3 plan** (per cluster: draft `impl-plan.md` for code-fix clusters; draft `reply.md` for every cluster), **4 apply** (per code-fix cluster in severity order: orchestrator shows impl-plan summary, user approves / refines / skips with a nits-batching shortcut, Sonnet subagent writes the fix, orchestrator reviews diff, commits one per cluster with no `--no-verify`), **5 wrap** (assemble **ALL** drafted replies into one batch view paired with reviewer quotes — this is a non-negotiable single user checkpoint before any reply leaves the local machine — then push with confirmation, post replies, optionally resolve threads with confirmation, write round report). Experimental issues are blocked at pre-flight since they have no PR. Output structure: `feedback/round-NN/` with `pulled.md`, `triage.md`, `clusters/<NN-slug>/{meta,impl-plan,reply}.md`, and `report.md`. Model: Opus orchestrator, Sonnet subagent for code writing.
 
-- `/dev-evaluate <issue-id>` — final phase. Reads every prior-phase artifact (gathering, plan, execution, feedback rounds, PR state) and produces a retrospective + archives lessons + closes the loop externally. Five sub-phases: **1 load** (read all artifacts, classify PR as `merged | closed-unmerged | open | n/a`), **2 analyze** (outcomes against original objectives + drift from plan, both held in memory), **3 retro** (draft `evaluation/retro.md` thinking artifact and `evaluation/lessons.md` per-issue decision artifact with category process/technical/collaboration and `promotion_candidate` flag; user reviews and edits before approval), **4 external** (idempotency check skips already-completed ops; then PR-state-gated batch of: GH issue closure comment, Jira subtask transitions, Jira parent transition, GH issue close — assembled into ONE batch view for user approval before any fires; on `open` PR only the interim-retro comment posts, all transitions and close deferred), **5 archive** (writes one file per lesson to repo-wide `.dev-assistant/lessons/<YYYY-MM-DD>-<id>-<slug>.md`, writes `evaluation/report.md`, offers optional workspace cleanup — opt-in, manual `rm -rf` until `dev-assistant issue close` is implemented). Experimental mode skips sub-phase 4 entirely. Re-runnable: PR-state changes pick up newly-allowed transitions on next invocation. Model: Opus orchestrator, no subagent (pure retrospective work).
+  ```
+  one review round per invocation — only comments newer than the last round:
+  ┌────────────────────┐
+  │ 0  round detection │  next feedback/round-NN/; since = the previous round's pull timestamp
+  ├────────────────────┤
+  │ 1  pull            │  issue comments + inline threads + review summaries; 0 new → stop here
+  ├────────────────────┤
+  │ 2  triage          │  severity × type → clusters (pause: approve / reclassify / defer / abandon)
+  ├────────────────────┤
+  │ 3  plan            │  per cluster: impl-plan (code-fix only) + drafted reply (every cluster)
+  ├────────────────────┤
+  │ 4  apply           │  repeat per code-fix cluster, severity order: approve (pause) → subagent fix
+  │                    │  → diff review → one commit per cluster
+  ├────────────────────┤
+  │ 5  wrap            │  ALL replies in ONE batch (pause) → push (CONFIRM) → post replies → resolve
+  │                    │  threads (CONFIRM) → commit-map update (CONFIRM) → verify remote state → report
+  └────────────────────┘
+  ```
+
+- `/dev-merge <issue-id>` — closes the review loop once the PR is approved. Four sub-phases: **1 merge readiness** (one checklist verified against live GitHub state — approvals, CI, unresolved threads, deferred discussion clusters, branch sync, base branch matches the plan's `target_branch`; any ✗ blocks by default, per-item user overrides are recorded), **2 merge-commit message** (subject `[<TICKET>] <summary> (#<PR>)` so GitHub autolinks commit → PR; user approves/edits), **3 merge + cleanup** (always a **merge commit**, never squash — commit SHAs referenced across Jira comments, review replies, and phase artifacts must stay valid; then branch deletion remote + local, both confirmed), **4 record** (update `plan.md` state, optional Jira comment, write `merge/report.md`). Hotfix flow walks both PRs — `uat` first, then the `develop` sync — and deletes the shared branch only after both merge. Idempotent: an already-merged PR skips to sub-phase 4. Model: Opus.
+
+  ```
+  ┌─────────────────────┐
+  │ pre-flight          │  workspace · PR recorded · gh auth · clean tree; already merged → skip to 4
+  ├─────────────────────┤
+  │ 1  merge readiness  │  approvals · CI · unresolved threads · deferred clusters · branch sync ·
+  │                     │  base matches plan — one checklist, any ✗ blocks (pause: per-item override)
+  ├─────────────────────┤
+  │ 2  merge message    │  subject "[<TICKET>] <summary> (#<PR>)" + outcome bullets (pause: approve/edit)
+  ├─────────────────────┤
+  │ 3  merge + cleanup  │  merge commit (CONFIRM) → verify landed → delete branch remote (CONFIRM) + local;
+  │                     │  hotfix: repeat 1–3 for the develop sync PR before any branch deletion
+  ├─────────────────────┤
+  │ 4  record           │  plan.md state · Jira comment (CONFIRM) · merge/report.md → next: /dev-evaluate
+  └─────────────────────┘
+  ```
+
+- `/dev-evaluate <issue-id>` — final phase. Reads every prior-phase artifact (gathering, plan, execution, feedback rounds, PR state) and produces a retrospective + archives lessons + closes the loop externally. Five sub-phases: **1 load** (read all artifacts, classify PR as `merged | closed-unmerged | open | n/a`), **2 analyze** (outcomes against original objectives + drift from plan, both held in memory), **3 retro** (draft `evaluation/retro.md` thinking artifact and `evaluation/lessons.md` per-issue decision artifact with category process/technical/collaboration and `promotion_candidate` flag; user reviews and edits before approval), **4 external** (idempotency check skips already-completed ops; then PR-state-gated batch of: GH issue closure comment, Jira subtask transitions, Jira parent transition, GH issue close — assembled into ONE batch view for user approval before any fires; on `open` PR only the interim-retro comment posts, all transitions and close deferred), **5 archive** (writes one file per lesson to the categorized repo-wide archive `.dev-assistant/lessons/<category>/<YYYY-MM-DD>-<id>-<slug>.md` — a lesson that repeats an existing one updates that file's recurrence count instead of duplicating it, and `INDEX.md` is regenerated; writes `evaluation/report.md`; offers the non-destructive workspace archive via `dev-assistant issue archive`). Experimental mode skips sub-phase 4 entirely. Re-runnable: PR-state changes pick up newly-allowed transitions on next invocation. Model: Opus orchestrator, no subagent (pure retrospective work).
+
+  ```
+  ┌─────────────┐
+  │ 1  load     │  read every prior artifact · verify remote state (PR/merge commit, replies actually
+  │             │  posted, GH issue, branch cleanup, Jira) — discrepancies become retro findings
+  ├─────────────┤
+  │ 2  analyze  │  outcomes vs the original objectives · drift from plan (held in memory)
+  ├─────────────┤
+  │ 3  retro    │  draft evaluation/retro.md + evaluation/lessons.md (pause: approve / edit / abandon)
+  ├─────────────┤
+  │ 4  external │  idempotency check → ONE batch (pause): GH closure comment · Jira subtask + parent
+  │             │  transitions · GH issue close — gated on PR state (open PR → interim comment only)
+  ├─────────────┤
+  │ 5  archive  │  lessons → lessons/<category>/ (recurrence dedupe) · INDEX.md rebuilt · report ·
+  │             │  optional non-destructive workspace archive (pause)
+  └─────────────┘
+  ```
 
 - `/dev-review <pr-number-or-url>` — **reviewer side**: review *someone else's* PR (the mirror image of `/dev-feedback`, which handles incoming review on your own PR). Re-invokable: round 01 reviews the whole PR; after the author pushes, the next round reviews only the delta since `last_reviewed_sha` (tracked in `reviews/pr-<n>/review.md`). Five sub-phases per round: **1 gather** (intent first — PR description, linked GH issue, linked Jira ticket via Atlassian MCP with paste/skip fallback — then code: per-commit narrative, diff, CI status, PR-branch checkout, blast-radius scan of changed-function call sites; writes `context.md` with distilled objectives traced to sources), **2 brief + Q&A** (writes `understanding.md` — what was asked / what the PR claims / what it actually changes / gaps / risk map — then immediately launches three background Sonnet reviewers for the small-scale dimensions (correctness, tests, conventions) while the user reads the brief and asks questions in the foreground; user questions can become findings (`source: user`) and corrections update the brief), **3 deep review** (the objective-coverage pass deliberately waits for the Q&A to settle since it's the dimension the discussion informs — hybrid sequencing; then collect background results, dedup, orchestrator-verify every finding against the real diff, classify with the `/dev-feedback` severity taxonomy extended with `blocking-objective` at the top: objective gaps rank above bugs), **4 select** (findings table sorted critical → trivial; the user explicitly picks which findings become review comments — nothing unselected ever reaches GitHub; drafts per-finding comment files + a summary with proposed verdict and the attribution footer from `comment-style`), **5 post** (one batch view of all comments + summary + verdict — single checkpoint — then submits everything atomically as **one** GitHub review via the pulls/reviews API: one notification to the author; never falls back to comment-by-comment posting). Read-only by design: no commits, no pushes; the only external write is the gated review submission. Attribution: one footer line in the review summary only, never per-comment. Workspace: `.dev-assistant/reviews/pr-<n>/round-NN/` with `context.md`, `understanding.md`, `findings.md`, `comments/`, `report.md`. Model: Opus orchestrator, Sonnet background reviewers.
+
+  ```
+  one round per invocation — round 02+ reviews only the delta since last_reviewed_sha:
+  ┌─────────────────┐
+  │ 1  gather       │  intent first (PR description, GH issue, Jira), then code (commits, diff, CI,
+  │                 │  checkout, blast radius) → context.md with distilled objectives
+  ├─────────────────┤
+  │ 2  brief + Q&A  │  understanding.md; 3 background Sonnet reviewers (correctness, tests,
+  │                 │  conventions) start now; user reads + asks questions in the foreground (pause)
+  ├─────────────────┤
+  │ 3  deep review  │  objective-coverage pass (waits for the Q&A — it's the dimension discussion
+  │                 │  informs) → collect background results → dedup → verify → classify
+  ├─────────────────┤
+  │ 4  select       │  findings table, critical → trivial; user picks EXACTLY what posts (pause) —
+  │                 │  unselected findings never reach GitHub
+  ├─────────────────┤
+  │ 5  post         │  one batch view: comments + summary + verdict (pause) → submitted atomically
+  │                 │  as ONE GitHub review (CONFIRM) — never comment-by-comment
+  └─────────────────┘
+  ```
 
 ### Gather phase output structure
 
@@ -219,7 +414,7 @@ Sources of information feeding the gather phase: the refinement report (`refinem
 
 ### Next up
 
-All lifecycle phase slash commands are implemented (`/dev-refine` through `/dev-evaluate`), plus the reviewer-side `/dev-review` (not a lifecycle phase — it stands alone, since the user is the reviewer, not the author). Remaining work is in CLI helpers and quality-of-life additions — see "Deferred / Next Up" below.
+All lifecycle phase slash commands are implemented (`/dev-refine` through `/dev-evaluate`, including the `/dev-merge` close of the review loop added in 0.6), plus the reviewer-side `/dev-review` (not a lifecycle phase — it stands alone, since the user is the reviewer, not the author). Remaining work is in CLI helpers and quality-of-life additions — see "Deferred / Next Up" below.
 
 ## CLI Conventions
 
