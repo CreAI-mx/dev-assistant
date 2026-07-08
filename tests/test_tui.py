@@ -92,7 +92,11 @@ def workspace(tmp_path: Path) -> Path:
     _write(rv / "round-01" / "report.md", "#\n")
     _write(rv / "round-02" / "comments" / "f3.md", "#\n")
 
+    # Lessons: one pre-0.6 flat file, one 0.6+ categorized file, and the
+    # regenerated INDEX.md (which must be excluded from the lesson list).
     _write(root / "lessons" / "2026-06-01-vn-0-thing.md", "# lesson\n")
+    _write(root / "lessons" / "process" / "2026-07-08-vn-1-batching.md", "# lesson\n")
+    _write(root / "lessons" / "INDEX.md", "# Lessons index\n")
     _write(root / "repo-context.md", "# context\n")
     _write(root / "strategies" / "branching-strategy.md", "# custom\n")
     return root
@@ -143,16 +147,20 @@ def test_load_workspace_counts(workspace):
     assert len(ws.active_issues) == 2
     assert len(ws.archived_issues) == 1
     assert len(ws.reviews) == 1
-    assert ws.lessons == ["2026-06-01-vn-0-thing.md"]
+    assert ws.lessons == [
+        "2026-06-01-vn-0-thing.md",
+        "process/2026-07-08-vn-1-batching.md",
+    ]
     assert ws.has_repo_context is True
     assert ws.custom_strategies == ["branching-strategy"]
 
 
-def test_six_phase_pipeline(workspace):
+def test_seven_phase_pipeline(workspace):
     ws = model.load_workspace(workspace)
     vn1 = {i.id: i for i in ws.active_issues}["VN-1"]
-    assert vn1.total_phases == 6
+    assert vn1.total_phases == 7
     assert [p.name for p in vn1.phases] == list(model.PHASE_ORDER)
+    assert "merge" in model.PHASE_ORDER
 
 
 def test_execution_subtasks_count_as_content(workspace):

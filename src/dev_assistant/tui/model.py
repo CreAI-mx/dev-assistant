@@ -5,7 +5,7 @@ build an in-memory snapshot. No Textual import here on purpose — this layer is
 fully unit-testable without a terminal, and the app layer renders it.
 
 Phase shapes seen in real workspaces:
-  - refinement / gathering / plan / evaluation : flat files
+  - refinement / gathering / plan / merge / evaluation : flat files
   - execution                                  : numbered subtask subfolders, each with files
   - feedback                                   : sub-N subfolders, each with round-NN subfolders
 The scanner models all of them through Phase -> SubPhase -> Round.
@@ -20,8 +20,9 @@ from pathlib import Path
 WORKSPACE_DIRNAME = ".dev-assistant"
 
 # Full author-side pipeline, in order. `refinement` (phase 0) and `feedback`
-# are optional, so an empty folder there does not mean "not started".
-PHASE_ORDER = ("refinement", "gathering", "plan", "execution", "feedback", "evaluation")
+# are optional, so an empty folder there does not mean "not started"; `merge`
+# is absent on pre-0.6 and experimental issues.
+PHASE_ORDER = ("refinement", "gathering", "plan", "execution", "feedback", "merge", "evaluation")
 
 PHASE_LABELS = {
     "refinement": "refine",
@@ -29,6 +30,7 @@ PHASE_LABELS = {
     "plan": "plan",
     "execution": "exec",
     "feedback": "feedback",
+    "merge": "merge",
     "evaluation": "eval",
 }
 
@@ -208,6 +210,7 @@ class PlanMeta:
     of branch / PR / external status, written by the slash commands."""
 
     branching_mode: str | None = None
+    flow: str | None = None
     total_subtasks: int | None = None
     total_commits: int | None = None
     branch_name: str | None = None
@@ -215,6 +218,8 @@ class PlanMeta:
     target_branch: str | None = None
     pr_url: str | None = None
     pr_state: str | None = None
+    develop_pr_url: str | None = None
+    merge_commit: str | None = None
     gh_issue_created: bool = False
     review_groups: list[str] = field(default_factory=list)
     last_feedback_round: str | None = None
@@ -462,6 +467,7 @@ def _load_plan_meta(issue_dir: Path) -> PlanMeta:
 
     return PlanMeta(
         branching_mode=_clean(meta.get("branching_mode")),
+        flow=_clean(meta.get("flow")),
         total_subtasks=_int("total_subtasks"),
         total_commits=_int("total_commits"),
         branch_name=_clean(meta.get("branch_name") or meta.get("proposed_branch")),
@@ -469,6 +475,8 @@ def _load_plan_meta(issue_dir: Path) -> PlanMeta:
         target_branch=_clean(meta.get("target_branch")),
         pr_url=_clean(meta.get("pr_url")),
         pr_state=_clean(meta.get("pr_state")),
+        develop_pr_url=_clean(meta.get("develop_pr_url")),
+        merge_commit=_clean(meta.get("merge_commit")),
         gh_issue_created=_as_bool(meta.get("gh_issue_created")),
         review_groups=_parse_review_groups(plan_md),
         last_feedback_round=_clean(meta.get("last_feedback_round")),
@@ -547,8 +555,13 @@ def load_workspace(root: Path) -> Workspace:
     lessons: list[str] = []
     lessons_dir = root / "lessons"
     if lessons_dir.is_dir():
+        # 0.6+ layout: category subfolders (process/, technical/, collaboration/)
+        # plus a regenerated INDEX.md; pre-0.6 workspaces have flat files at the
+        # root. Collect both as lessons-dir-relative paths, excluding the index.
         lessons = sorted(
-            p.name for p in lessons_dir.iterdir() if p.is_file() and p.suffix == ".md"
+            p.relative_to(lessons_dir).as_posix()
+            for p in lessons_dir.rglob("*.md")
+            if p.is_file() and p.name != "INDEX.md"
         )
 
     strategies: list[str] = []

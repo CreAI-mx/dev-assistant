@@ -96,7 +96,7 @@ def render_overview(
     parts.append(_h("Pipeline distribution (active issues)"))
     dist = ws.phase_distribution
     rows = [(name, dist.get(name, 0)) for name in (
-        "refinement", "gathering", "plan", "execution", "feedback", "evaluation")]
+        "refinement", "gathering", "plan", "execution", "feedback", "merge", "evaluation")]
     rows.append(("complete", dist.get("complete", 0)))
     maxval = max((c for _, c in rows), default=0) or 1
     chart = Table.grid(padding=(0, 1))
@@ -274,6 +274,15 @@ def _status_table(issue: Issue, git: GitInfo | None) -> RenderableType:
 
     # Publish status.
     t.add_row("PR", _pr_status(plan))
+    if plan.flow == "hotfix":
+        sync = Text("hotfix", style="magenta")
+        if plan.develop_pr_url:
+            sync.append(f"  sync PR: {plan.develop_pr_url}", style="dim")
+        else:
+            sync.append("  sync PR not opened", style="yellow")
+        t.add_row("flow", sync)
+    if plan.merge_commit:
+        t.add_row("merged as", Text(plan.merge_commit, style="green"))
     gh = Text(f"{theme.ICON_OK} created", style="green") if plan.gh_issue_created else Text(
         "not created", style="dim")
     t.add_row("gh issue", gh)
@@ -302,8 +311,9 @@ def _timeline(issue: Issue, ref: datetime | None) -> RenderableType:
     lines: list[Text] = []
     for phase in issue.phases:
         state = issue.phase_state(phase)
-        # Skip optional phases that never started.
-        if not phase.has_content and phase.name in ("refinement", "feedback"):
+        # Skip optional phases that never started (merge is also absent on
+        # pre-0.6 and experimental issues).
+        if not phase.has_content and phase.name in ("refinement", "feedback", "merge"):
             continue
 
         line = Text()
