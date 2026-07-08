@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is in alpha (`0.x`), breaking changes may land in any minor version.
 
+## [Unreleased]
+
+Adds the merge phase (explicit close of the review loop), first-class hotfix handling, remote-state verification in reports, and a reorganized lessons archive.
+
+### Added
+
+- **`/dev-merge <issue-id>`** — the previously missing step between feedback rounds and evaluate. Verifies merge readiness against live GitHub state (approvals, CI, unresolved threads, deferred clusters, branch sync, base-branch match) as one ✗-blocks-by-default checklist, builds the merge-commit message with the trackable `[<TICKET>] <summary> (#<PR>)` subject, merges with a **merge commit** (never squash/rebase-merge — commit SHAs referenced in Jira comments, review replies, and phase artifacts stay valid), deletes the branch (remote + local), optionally comments on Jira, and writes `merge/report.md`. Idempotent on re-run (already-merged PRs skip to state/report). The merge-commit policy is now rule 12 of the default branching strategy.
+- **Hotfix flow.** `/dev-plan` sub-stage 4 now decides `flow: feature | hotfix`. A hotfix forces `hotfix/<TICKET>-<slug>` off `uat`, `single-branch` mode, 1–2 subtasks, `fix` commits; `/dev-execute` wrap-up gains sub-phase 4.5b (opens the `develop` sync PR — per the strategy every hotfix needs two PRs); `/dev-merge` walks both PRs (`uat` first, branch deleted only after both merge).
+- **Commit map in the PR body.** `/dev-execute` wrap-up appends a `## Commit map` table (commit ↔ subtask ↔ Jira subtask key ↔ subject) so reviewers can review commit-by-commit; `/dev-feedback` 5.5 appends a row per review-fix commit. Added to `pr-template`.
+- **Auto-assignment.** GH issues are created with `--assignee @me`; Jira subtasks are assigned to the currently authenticated Jira user (account ID resolved via `atlassianUserInfo` at creation time). Always the user running the phase — never a hardcoded name.
+- **User guide** (`docs/user-guide.md`) — setup, an experimental-mode dry run as the recommended first contact (nothing leaves the machine), a phase-by-phase lifecycle walkthrough (what you're asked, what lands on disk), key concepts (strategies, repo context, flows, branching modes, the confirmation principle), workspace layout, CLI reference, and a troubleshooting FAQ. README now links to it.
+- **Remote-state verification in reports.** `/dev-feedback` gains sub-phase 5.6 (were the replies actually posted? branch in sync? threads really resolved? current review decision?) and records a `remote_state` block + section in the round report. `/dev-evaluate` sub-phase 1 now verifies PR/merge-commit, posted replies, GH issue state, branch cleanup, and Jira statuses against remote reality; the retro gains a "Remote state" section where local-vs-remote discrepancies are findings.
+
+### Changed
+
+- **Base branch is resolved, not assumed.** `/dev-plan` records `target_branch` resolved from the branching strategy (stating where the value came from); `/dev-execute` verifies `origin/<target_branch>` exists before branching, uses it for every branch/rebase/PR operation, and verifies the created PR's `baseRefName`; `/dev-feedback` pre-flight check 8 stops on base mismatch.
+- **Lessons archive reorganized** (`/dev-evaluate` 5.2): category subfolders (`process/`, `technical/`, `collaboration/`), semantic dedupe — a recurring lesson updates the existing file's `## Recurrences` instead of creating a near-duplicate (2+ recurrences auto-flags promotion) — and a regenerated `INDEX.md` with a promotion-candidates view. Pre-0.6 flat files are migrated into category folders on the next archive run.
+- `/dev-feedback` final report surfaces the review decision and points to `/dev-merge` when approved, and reminds that Slack-channel feedback can be pasted into the next round.
+- **TUI updated for the new pipeline and layout**: `merge` appears in the phase order, timeline, and pipeline distribution (hidden on issues that never ran it, like pre-0.6 and experimental ones); the lessons pane reads the categorized `lessons/<category>/` layout (flat pre-0.6 files still work, `INDEX.md` excluded); the issue status panel shows the hotfix flow with its sync-PR state and the merge commit once merged (`flow`, `develop_pr_url`, `merge_commit` from `plan.md`).
+
+### Fixed
+
+- `/dev-execute VN-788 2` no longer crashes: the embedded `dev-assistant issue show` call now receives only the issue ID (`$1`), not the full argument string. Same fix applied to `/dev-feedback`.
+
 ## [0.5.0] - 2026-06-23
 
 Migrates the default branching strategy from the v1.x sprint-version model to **v2.0** (sprint-driven, trunk-friendly), matching the Akinator engine team's Contributing wiki, and ships an experimental read-only **terminal dashboard**. **Breaking** for in-flight issues planned under the old model — see *Migration*.
