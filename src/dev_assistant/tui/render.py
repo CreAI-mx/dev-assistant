@@ -16,7 +16,7 @@ from rich.text import Text
 
 from . import theme
 from .gitinfo import GitInfo
-from .model import Issue, PhaseStatus, Review, Workspace, humanize_age
+from .model import Issue, PhaseStatus, Review, Round, Workspace, humanize_age
 
 # --- small primitives ---------------------------------------------------------
 
@@ -171,9 +171,11 @@ def _subphase_state(issue: Issue, phase: PhaseStatus, sub_name: str, phase_state
         return "done"
     if phase_state == "pending":
         return "pending"
-    # active phase — try to locate the active subphase.
-    last = issue.plan.last_feedback_round  # e.g. "sub-2/01"
-    if phase.name == "feedback" and last:
+    # Active phase — try to locate the active subphase. `last_feedback_round` is
+    # `sub-N/NN` in sub-branches mode and a bare `NN` for a main-PR round (which
+    # names no sub-branch, so it falls through to the positional default).
+    last = issue.plan.last_feedback_round
+    if phase.name == "feedback" and last and "/" in last:
         active_sub = last.split("/", 1)[0]
         names = [sp.name for sp in phase.subphases]
         if sub_name == active_sub:
@@ -185,6 +187,30 @@ def _subphase_state(issue: Issue, phase: PhaseStatus, sub_name: str, phase_state
     if names and sub_name == names[-1]:
         return "active"
     return "done"
+
+
+def _round_line(rnd: Round, state: str, depth: int) -> Text:
+    """One `round-NN` timeline row, with its cluster/file counts."""
+    line = Text()
+    line.append(f"{theme.ICON_VBAR} " * depth, style="grey37")
+    line.append_text(_dot(state))
+    line.append(" ")
+    line.append(rnd.name, style=theme.state_style(state))
+    detail = []
+    if rnd.cluster_count:
+        detail.append(f"{rnd.cluster_count} cluster{'s' if rnd.cluster_count != 1 else ''}")
+    if rnd.files:
+        detail.append(f"{len(rnd.files)} file{'s' if len(rnd.files) != 1 else ''}")
+    if detail:
+        line.append(f"   {' · '.join(detail)}", style="dim")
+    return line
+
+
+def _round_states(rounds: list[Round], phase_state: str) -> list[str]:
+    """State per round: all done in a finished phase, last one active otherwise."""
+    if phase_state != "active" or not rounds:
+        return [phase_state] * len(rounds)
+    return ["done"] * (len(rounds) - 1) + ["active"]
 
 
 def _dot(state: str) -> Text:
@@ -328,7 +354,15 @@ def _timeline(issue: Issue, ref: datetime | None) -> RenderableType:
             line.append(f"   {humanize_age(phase.last_modified, ref=ref)}", style="grey37")
         lines.append(line)
 
-        # Subphases.
+        # Rounds sitting directly under the phase (single-branch / main-PR feedback).
+        for rnd, rstate in zip(
+            phase.rounds, _round_states(phase.rounds, state), strict=True
+        ):
+            if not rnd.has_content:
+                continue
+            lines.append(_round_line(rnd, rstate, depth=1))
+
+        # Subphases, each with its own rounds.
         for sp in phase.subphases:
             if not sp.has_content:
                 continue
@@ -347,14 +381,29 @@ def _timeline(issue: Issue, ref: datetime | None) -> RenderableType:
                 sline.append(f"   {' · '.join(detail)}", style="dim")
             lines.append(sline)
 
+            for rnd, rstate in zip(
+                sp.rounds, _round_states(sp.rounds, sub_state), strict=True
+            ):
+                if not rnd.has_content:
+                    continue
+                lines.append(_round_line(rnd, rstate, depth=2))
+
     return Group(*lines) if lines else Text("no phases yet", style="dim")
 
 
 def _phase_meta(phase: PhaseStatus) -> str:
     if phase.name == "execution" and phase.subphase_count:
         return f"{phase.subphase_count} subtasks"
-    if phase.name == "feedback" and phase.subphases:
-        return f"{phase.subphase_count} sub-branches · {phase.total_rounds} rounds"
+    if phase.name == "feedback" and (phase.subphases or phase.rounds):
+        bits = []
+        if phase.subphase_count:
+            bits.append(f"{phase.subphase_count} sub-branches")
+        n = phase.total_rounds
+        bits.append(f"{n} round{'s' if n != 1 else ''}")
+        if phase.total_clusters:
+            c = phase.total_clusters
+            bits.append(f"{c} cluster{'s' if c != 1 else ''}")
+        return " · ".join(bits)
     if phase.files:
         n = len(phase.files)
         return f"{n} file{'s' if n != 1 else ''}"

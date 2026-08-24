@@ -27,6 +27,9 @@ Adds the merge phase (explicit close of the review loop), first-class hotfix han
 ### Fixed
 
 - `/dev-execute VN-788 2` no longer crashes: the embedded `dev-assistant issue show` call now receives only the issue ID (`$1`), not the full argument string. Same fix applied to `/dev-feedback`.
+- **TUI now shows main-PR feedback rounds.** In single-branch mode rounds live directly at `feedback/round-NN/`, but the scanner only looked for rounds one level down (`feedback/sub-N/round-NN/`), so those folders were modeled as sub-branches: the phase read `N sub-branches · 0 rounds` and no round appeared in the timeline. Phases now carry their own rounds alongside subphases, and `round-*` folders are no longer mistaken for sub-branches.
+- **TUI now shows feedback clusters.** A round's `clusters/<id>-<slug>/` folders were never scanned — clusters were absent from every count (`artifact_count` undercounted the whole phase) and, in single-branch mode, their `impl-plan.md` / `reply.md` artifacts were unreachable in the nav tree. Rounds now model their clusters, the timeline and tree show cluster counts, and round nodes expose any nested folder (`clusters/`, `comments/`) instead of only flat files.
+- The subphase-state helper no longer misreads a bare `last_feedback_round: NN` (what the commands actually write for a main-PR round) as a `sub-N` name.
 
 ## [0.5.0] - 2026-06-23
 

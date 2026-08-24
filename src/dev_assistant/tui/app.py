@@ -18,7 +18,7 @@ from textual.widgets.tree import TreeNode
 
 from . import render, theme
 from .gitinfo import GitInfo, load_git_info
-from .model import Issue, PhaseStatus, Review, Workspace, load_workspace
+from .model import Issue, PhaseStatus, Review, Round, Workspace, load_workspace
 
 KIND_OVERVIEW = "overview"
 KIND_ISSUE = "issue"
@@ -147,6 +147,11 @@ class DashboardApp(App):
             phase_node.add_leaf(
                 fname, data={"kind": KIND_FILE, "path": phase.path / fname}
             )
+        # Rounds directly under the phase — single-branch / main-PR feedback.
+        for rnd in phase.rounds:
+            if not rnd.has_content:
+                continue
+            self._add_round_node(phase_node, rnd)
         for sp in phase.subphases:
             if not sp.has_content:
                 continue
@@ -165,12 +170,17 @@ class DashboardApp(App):
                     fname, data={"kind": KIND_FILE, "path": sp.path / fname}
                 )
             for rnd in sp.rounds:
-                rnode = sp_node.add(Text(rnd.name, style="yellow"))
-                for f in sorted(rnd.path.rglob("*.md")):
-                    rnode.add_leaf(
-                        str(f.relative_to(rnd.path)),
-                        data={"kind": KIND_FILE, "path": f},
-                    )
+                self._add_round_node(sp_node, rnd)
+
+    def _add_round_node(self, parent: TreeNode, rnd: Round) -> None:
+        """A round node: its flat files, then a node per nested folder
+        (`clusters/<id>-<slug>/` on the feedback side, `comments/` on the
+        reviewer side)."""
+        label = Text(rnd.name, style="yellow")
+        if rnd.cluster_count:
+            label.append(f"  {rnd.cluster_count}c", style="dim")
+        rnode = parent.add(label)
+        _add_dir_children(rnode, rnd.path)
 
     def _add_review_node(self, parent: TreeNode, review: Review) -> None:
         label = Text()
@@ -178,11 +188,7 @@ class DashboardApp(App):
         label.append(f"  {review.last_verdict} · r{review.round_count}", style="dim")
         node = parent.add(label, data={"kind": KIND_REVIEW, "review": review})
         for rnd in review.rounds:
-            rnode = node.add(Text(rnd.name, style="yellow"))
-            for f in sorted(rnd.path.rglob("*.md")):
-                rnode.add_leaf(
-                    str(f.relative_to(rnd.path)), data={"kind": KIND_FILE, "path": f}
-                )
+            self._add_round_node(node, rnd)
         review_md = review.path / "review.md"
         if review_md.is_file():
             node.add_leaf("review.md", data={"kind": KIND_FILE, "path": review_md})
@@ -232,6 +238,18 @@ class DashboardApp(App):
 
     def action_overview(self) -> None:
         self._show_overview()
+
+
+def _add_dir_children(node: TreeNode, path: Path) -> None:
+    """Add `path`'s files as leaves and its subfolders as nested nodes."""
+    if not path.is_dir():
+        return
+    children = sorted(path.iterdir(), key=lambda p: (p.is_dir(), p.name))
+    for child in children:
+        if child.is_file():
+            node.add_leaf(child.name, data={"kind": KIND_FILE, "path": child})
+        elif child.is_dir() and any(child.iterdir()):  # skip empty scaffolding
+            _add_dir_children(node.add(Text(f"{child.name}/", style="magenta")), child)
 
 
 def _section(name: str, count: int) -> Text:

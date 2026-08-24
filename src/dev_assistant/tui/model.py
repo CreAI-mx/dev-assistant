@@ -7,8 +7,10 @@ fully unit-testable without a terminal, and the app layer renders it.
 Phase shapes seen in real workspaces:
   - refinement / gathering / plan / merge / evaluation : flat files
   - execution                                  : numbered subtask subfolders, each with files
-  - feedback                                   : sub-N subfolders, each with round-NN subfolders
-The scanner models all of them through Phase -> SubPhase -> Round.
+  - feedback (single-branch / main PR)         : round-NN subfolders directly under the phase
+  - feedback (sub-branches)                    : sub-N subfolders, each with round-NN subfolders
+The scanner models all of them through Phase -> (Round | SubPhase -> Round), and
+each round through its flat files plus its `clusters/<id>-<slug>/` subfolders.
 """
 from __future__ import annotations
 
@@ -139,15 +141,33 @@ def _tree_latest_mtime(path: Path) -> datetime | None:
 
 
 @dataclass
+class Cluster:
+    """One `clusters/<id>-<slug>/` folder inside a feedback round."""
+
+    name: str
+    files: list[str]
+    path: Path
+
+
+@dataclass
 class Round:
     name: str
     files: list[str]
     path: Path
     last_modified: datetime | None
+    clusters: list[Cluster] = field(default_factory=list)
 
     @property
     def has_content(self) -> bool:
-        return bool(self.files)
+        return bool(self.files) or any(c.files for c in self.clusters)
+
+    @property
+    def cluster_count(self) -> int:
+        return len(self.clusters)
+
+    @property
+    def artifact_count(self) -> int:
+        return len(self.files) + sum(len(c.files) for c in self.clusters)
 
 
 @dataclass
@@ -176,6 +196,9 @@ class PhaseStatus:
     subphases: list[SubPhase]
     path: Path
     last_modified: datetime | None
+    # Rounds sitting directly under the phase folder — the single-branch /
+    # main-PR feedback shape, where there is no sub-N level.
+    rounds: list[Round] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -183,7 +206,11 @@ class PhaseStatus:
 
     @property
     def has_content(self) -> bool:
-        return bool(self.files) or any(sp.has_content for sp in self.subphases)
+        return (
+            bool(self.files)
+            or any(r.has_content for r in self.rounds)
+            or any(sp.has_content for sp in self.subphases)
+        )
 
     @property
     def subphase_count(self) -> int:
@@ -191,16 +218,22 @@ class PhaseStatus:
 
     @property
     def total_rounds(self) -> int:
-        return sum(sp.round_count for sp in self.subphases)
+        return len(self.rounds) + sum(sp.round_count for sp in self.subphases)
+
+    @property
+    def total_clusters(self) -> int:
+        n = sum(r.cluster_count for r in self.rounds)
+        for sp in self.subphases:
+            n += sum(r.cluster_count for r in sp.rounds)
+        return n
 
     @property
     def artifact_count(self) -> int:
         """Total leaf files across this phase (direct + nested)."""
-        n = len(self.files)
+        n = len(self.files) + sum(r.artifact_count for r in self.rounds)
         for sp in self.subphases:
             n += len(sp.files)
-            for r in sp.rounds:
-                n += len(r.files)
+            n += sum(r.artifact_count for r in sp.rounds)
         return n
 
 
@@ -379,16 +412,28 @@ def _count_comments(round_dir: Path) -> int:
     )
 
 
+def _scan_clusters(round_dir: Path) -> list[Cluster]:
+    clusters_dir = round_dir / "clusters"
+    if not clusters_dir.is_dir():
+        return []
+    return [
+        Cluster(name=d.name, files=_files_in(d), path=d)
+        for d in sorted(p for p in clusters_dir.iterdir() if p.is_dir())
+    ]
+
+
 def _scan_rounds(parent: Path) -> list[Round]:
     rounds: list[Round] = []
     for d in sorted(p for p in parent.iterdir() if p.is_dir() and p.name.startswith("round-")):
-        # round artifacts may be nested (comments/, clusters/); collect leaf names shallowly.
+        # Round artifacts may be nested: comments/ (review side) is summarized by
+        # _count_comments, clusters/ (feedback side) is modeled explicitly.
         rounds.append(
             Round(
                 name=d.name,
                 files=_files_in(d),
                 path=d,
                 last_modified=_tree_latest_mtime(d),
+                clusters=_scan_clusters(d),
             )
         )
     return rounds
@@ -397,6 +442,8 @@ def _scan_rounds(parent: Path) -> list[Round]:
 def _scan_subphases(phase_dir: Path) -> list[SubPhase]:
     subs: list[SubPhase] = []
     for d in sorted(p for p in phase_dir.iterdir() if p.is_dir()):
+        if d.name.startswith("round-"):
+            continue  # a phase-level round, not a sub-branch — scanned separately
         rounds = _scan_rounds(d)
         subs.append(
             SubPhase(
@@ -416,9 +463,11 @@ def _scan_phases(issue_dir: Path) -> list[PhaseStatus]:
         phase_dir = issue_dir / name
         files: list[str] = []
         subphases: list[SubPhase] = []
+        rounds: list[Round] = []
         if phase_dir.is_dir():
             files = _files_in(phase_dir)
             subphases = _scan_subphases(phase_dir)
+            rounds = _scan_rounds(phase_dir)
         phases.append(
             PhaseStatus(
                 name=name,
@@ -426,6 +475,7 @@ def _scan_phases(issue_dir: Path) -> list[PhaseStatus]:
                 subphases=subphases,
                 path=phase_dir,
                 last_modified=_tree_latest_mtime(phase_dir),
+                rounds=rounds,
             )
         )
     return phases

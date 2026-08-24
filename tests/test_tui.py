@@ -54,6 +54,14 @@ def workspace(tmp_path: Path) -> Path:
     _write(i1 / "execution" / "01-scaffold" / "execution-notes.md", "# notes\n")
     _write(i1 / "execution" / "02-algo" / "impl-plan.md", "# 02\n")
     _write(i1 / "feedback" / "sub-1" / "round-01" / "report.md", "# r1\n")
+    _write(
+        i1 / "feedback" / "sub-1" / "round-01" / "clusters" / "01-oauth-bug" / "impl-plan.md",
+        "# fix\n",
+    )
+    _write(
+        i1 / "feedback" / "sub-1" / "round-01" / "clusters" / "01-oauth-bug" / "reply.md",
+        "# reply\n",
+    )
     _write(i1 / "feedback" / "sub-1" / "round-02" / "report.md", "# r2\n")
     _write(i1 / "feedback" / "sub-2" / "round-01" / "report.md", "# r1\n")
     (i1 / "evaluation").mkdir()
@@ -182,6 +190,72 @@ def test_feedback_rounds_scanned(workspace):
     assert fb.total_rounds == 3
     sub1 = next(sp for sp in fb.subphases if sp.name == "sub-1")
     assert sub1.round_count == 2
+
+
+def test_feedback_clusters_scanned(workspace):
+    """Regression: a round's `clusters/<id>-<slug>/` folders were invisible —
+    neither counted nor reachable, so cluster artifacts never showed up."""
+    ws = model.load_workspace(workspace)
+    vn1 = {i.id: i for i in ws.active_issues}["VN-1"]
+    fb = next(p for p in vn1.phases if p.name == "feedback")
+    r1 = next(sp for sp in fb.subphases if sp.name == "sub-1").rounds[0]
+    assert [c.name for c in r1.clusters] == ["01-oauth-bug"]
+    assert r1.clusters[0].files == ["impl-plan.md", "reply.md"]
+    assert r1.cluster_count == 1
+    assert r1.artifact_count == 3  # report.md + 2 cluster files
+    assert fb.total_clusters == 1
+    assert fb.artifact_count == 5
+
+
+@pytest.fixture
+def mainpr_workspace(tmp_path: Path) -> Path:
+    """Single-branch mode: feedback rounds live directly under the phase folder
+    (`feedback/round-NN/`), with no `sub-N` level."""
+    root = tmp_path / "solo" / ".dev-assistant"
+    i = root / "issues" / "VN-9"
+    _write(
+        i / "issue.md",
+        "---\nid: VN-9\ntitle: Solo\ncreated: 2026-07-01T10:00:00+00:00\n"
+        "status: active\nexperimental: false\n---\n\nDesc\n",
+    )
+    _write(i / "gathering" / "objectives.md", "# o\n")
+    _write(
+        i / "plan" / "plan.md",
+        "---\nissue: VN-9\nbranching_mode: single-branch\npr_url: https://x/pull/9\n"
+        "pr_state: open\nlast_feedback_round: 02\n---\n\n# Plan\n",
+    )
+    _write(i / "execution" / "01-work" / "impl-plan.md", "# 01\n")
+    for rnd in ("round-01", "round-02"):
+        _write(i / "feedback" / rnd / "pulled.md", "# pulled\n")
+        _write(i / "feedback" / rnd / "triage.md", "# triage\n")
+        _write(i / "feedback" / rnd / "clusters" / "01-thing" / "reply.md", "# reply\n")
+    return root
+
+
+def test_mainpr_rounds_are_rounds_not_subphases(mainpr_workspace):
+    """Regression: `feedback/round-NN/` folders were scanned as sub-branches, so
+    the round count read 0 and no round ever appeared in the TUI."""
+    ws = model.load_workspace(mainpr_workspace)
+    vn9 = ws.active_issues[0]
+    fb = next(p for p in vn9.phases if p.name == "feedback")
+    assert fb.has_content is True
+    assert fb.subphase_count == 0
+    assert [r.name for r in fb.rounds] == ["round-01", "round-02"]
+    assert fb.total_rounds == 2
+    assert fb.total_clusters == 2
+    assert fb.artifact_count == 6
+
+
+def test_mainpr_rounds_render_in_timeline(mainpr_workspace):
+    ws = model.load_workspace(mainpr_workspace)
+    vn9 = ws.active_issues[0]
+    fb = next(p for p in vn9.phases if p.name == "feedback")
+    assert render._phase_meta(fb) == "2 rounds · 2 clusters"
+    out = _rtext(render.render_issue(vn9))
+    assert "round-01" in out and "round-02" in out
+    assert "1 cluster" in out
+    # bare `NN` last_feedback_round must not be mistaken for a sub-branch name
+    assert render._subphase_state(vn9, fb, "sub-1", "active") == "done"
 
 
 def test_current_phase_is_feedback(workspace):
@@ -341,6 +415,38 @@ def test_hbar_resolution():
 
 
 # --- app smoke test (headless) ------------------------------------------------
+
+
+def test_tree_exposes_main_pr_rounds_and_clusters(mainpr_workspace):
+    """Regression: the nav tree only walked phase -> sub-N -> round, so main-PR
+    rounds and every cluster artifact were unreachable."""
+    pytest.importorskip("textual")
+    import asyncio
+
+    from dev_assistant.tui.app import DashboardApp
+
+    async def scenario():
+        app = DashboardApp(mainpr_workspace)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tree = app.query_one("#nav")
+
+            def walk(n):
+                yield n
+                for c in n.children:
+                    yield from walk(c)
+
+            nodes = list(walk(tree.root))
+            labels = [str(n.label) for n in nodes]
+            assert any("round-01" in lbl for lbl in labels)
+            assert any("clusters/" in lbl for lbl in labels)
+            assert any("01-thing" in lbl for lbl in labels)
+            paths = [
+                n.data["path"] for n in nodes if n.data and n.data.get("kind") == "file"
+            ]
+            assert any(p.parent.name == "01-thing" and p.name == "reply.md" for p in paths)
+
+    asyncio.run(scenario())
 
 
 def test_app_boots(workspace):
