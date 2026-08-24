@@ -195,6 +195,30 @@ def test_issue_show_defaults_pre_field_issues_to_guided(
     assert "pre-0.6 issue" in result.stdout
 
 
+def test_issue_size_rejects_unknown_band(runner: CliRunner, chdir_tmp: Path) -> None:
+    """Validated before shelling out to git, so the error is about the band."""
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["issue", "create", "--id", "SZ-1", "--title", "x"])
+    result = runner.invoke(app, ["issue", "size", "--id", "SZ-1", "--band", "XXL"])
+    assert result.exit_code == 1
+    assert "Use S, M, or L" in result.stdout + result.stderr
+
+
+def test_issue_size_requires_a_known_issue(runner: CliRunner, chdir_tmp: Path) -> None:
+    runner.invoke(app, ["init"])
+    result = runner.invoke(app, ["issue", "size", "--id", "NOPE-1"])
+    assert result.exit_code == 1
+
+
+def test_code_economy_strategy_resolves(runner: CliRunner, chdir_tmp: Path) -> None:
+    """The phases load it by name — it must exist as a source default."""
+    runner.invoke(app, ["init"])
+    result = runner.invoke(app, ["strategies", "show", "code-economy"])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "Code economy" in result.stdout
+    assert "source: default" in result.stdout
+
+
 def test_review_create_without_init_fails(runner: CliRunner, chdir_tmp: Path) -> None:
     result = runner.invoke(app, ["review", "create", "--pr", "123"])
     assert result.exit_code == 1

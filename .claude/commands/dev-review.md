@@ -40,6 +40,10 @@ If the workspace doesn't exist yet (the command above errors), this is the first
 
 !`dev-assistant strategies show output-style`
 
+### Code economy (the standard the economy dimension reviews against)
+
+!`dev-assistant strategies show code-economy`
+
 ### Repo context — repo-specific rules to respect
 
 !`dev-assistant repo-context show`
@@ -128,11 +132,12 @@ The plain-words brief. Frontmatter: `pr`, `round`, `status: draft`. Sections:
 
 ### 2.2 — Launch the small-scale reviewers (background, immediately)
 
-The moment `understanding.md` is written — before the user starts asking questions — dispatch **three background subagents** (Agent tool, `run_in_background: true`, model `sonnet`, `subagent_type: general-purpose`). Each gets: the brief, the diff (or delta), the repo-context rules, and one dimension:
+The moment `understanding.md` is written — before the user starts asking questions — dispatch **four background subagents** (Agent tool, `run_in_background: true`, model `sonnet`, `subagent_type: general-purpose`). Each gets: the brief, the diff (or delta), the repo-context rules, and one dimension:
 
 1. **Correctness** — bugs, broken contracts, edge cases, error handling, security. *Small scale: read the lines like they'll run at 3am.*
 2. **Tests** — are the changed behaviors tested? Do the tests test the right thing? Missing branches?
 3. **Conventions** — style, naming, docs, repo-context rule violations.
+4. **Economy** — is this the smallest change that does the job? Give this one the code-economy strategy text and its checklist: files added where existing ones would do, abstractions with one caller, configurability nothing asks for, defensive code for impossible states, wrappers that only forward, tests repeating each other, comments restating code, dead parameters and options. Two hard rules for this dimension: **cite the alternative** — a finding must say what the smaller version looks like, not just that the code is long — and **never trade correctness or a stated objective for size**. Readability counts as a cost too: flag clever compression (dense comprehensions, chained ternaries, one-letter names) exactly as it flags bloat. Both directions are the same failure.
 
 Each subagent returns findings as a list: `{file, line, category, severity, what, why, suggestion}`. Instruct them: findings must cite real file:line positions from the diff; no speculation about code they haven't read; an empty list is a valid answer.
 
@@ -176,23 +181,25 @@ Now run the large-scale pass yourself (orchestrator, no subagent — this is jud
 
 ### 3.2 — Collect the background reviewers
 
-Retrieve the three background subagents' results (they've had the entire Q&A to work). If one is still running, wait for it. If one failed, note the gap honestly in the round report — do not silently present partial coverage as full.
+Retrieve the four background subagents' results (they've had the entire Q&A to work). If one is still running, wait for it. If one failed, note the gap honestly in the round report — do not silently present partial coverage as full.
 
 ### 3.3 — Merge, verify, classify → `findings.md`
 
-Merge all findings: objective pass + 3 background dimensions + `discussion-findings`. Then:
+Merge all findings: objective pass + 4 background dimensions + `discussion-findings`. Then:
 
 - **Dedup** — same underlying problem reported twice keeps the best-argued copy.
 - **Verify** — for each surviving finding, check it against the actual diff/code yourself. A finding that cites a line that doesn't exist, or misreads the code, dies here. Background reviewers propose; the orchestrator confirms.
 - **Re-check against corrections** — any finding whose premise a discussion correction invalidated dies here too.
 - **Classify** on two axes (the `/dev-feedback` taxonomy, extended with one tier at the top):
   - **Severity**: `blocking-objective` (the PR doesn't solve what it's supposed to solve, or part of it) → `blocking-correctness` → `blocking-design` → `should-fix` → `nit` → `question` → `praise`
-  - **Type**: `objective`, `bug`, `security`, `design`, `perf`, `tests`, `style`, `docs`, `question`
+  - **Type**: `objective`, `bug`, `security`, `design`, `perf`, `tests`, `style`, `docs`, `bloat`, `question`
+
+`bloat` findings carry the smaller alternative in their `suggestion` — "this could be three lines in `existing_fn()` instead of a new module" — and sit at `should-fix` or `nit` unless the excess is itself a correctness risk (an unused code path nobody will maintain). A PR is never blocked for being long; it is blocked for being wrong.
 
 Write `findings.md`: frontmatter (`pr`, `round`, `total`, `by_severity` counts, `status: pending-selection`), then one section per finding, sorted by severity:
 
 ```
-## F<NN> — <slug>   [severity · type · source: objective-pass|correctness|tests|conventions|user]
+## F<NN> — <slug>   [severity · type · source: objective-pass|correctness|tests|conventions|economy|user]
 
 - where: <path>:<line> (or "PR-level")
 - what: <one sentence>
@@ -215,6 +222,7 @@ Findings — round NN (X total: A blocking-objective, B blocking-correctness, C 
 [ ] F02  blocking-correctness · bug       auth.py:142 — state param dropped on redirect
 [ ] F03  should-fix · tests               no test for the expired-token branch
 [ ] F04  nit · style                      parser.py:88 — naming inconsistent with siblings
+[ ] F05  should-fix · bloat                registry.py — new class has one caller; inline into load()
 ...
 
 Full details at round-NN/findings.md.

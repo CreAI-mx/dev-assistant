@@ -97,6 +97,7 @@ Available templates (each becomes a strategy):
 
 - **`process-objectives.md`** — standard per-issue process expectations (loaded by `/dev-gather`).
 - **`output-style.md`** — how dev-assistant writes artifacts: frontmatter, headings, voice, quoting vs paraphrasing, length per section, what to avoid. Consumed by every slash command that writes a file.
+- **`code-economy.md`** — the smallest-change standard: the readability tie-breaker ("when the shorter version takes longer to explain, take the longer one"), a ten-item checklist of where oversized diffs come from, size bands (S ≤50 / M ≤150 / L ≤400 added lines), what is exempt, and the one-sentence test before committing. Consumed by `/dev-plan` (sizing subtasks), `/dev-execute` (writing code, the trim at 3.2, the reduction pass at wrap-up), `/dev-feedback` (keeping review fixes from growing into refactors), and `/dev-review` (the economy reviewer dimension).
 - **`branching-strategy.md`** — branch structure (`develop` integration, `uat` mirror, `feat/` off `develop`, sub-branches, `--xrepo`, hotfix), conventional commits, rules, step-by-step workflow including the draft-PR-at-start + empty-commit flow. Consumed by `/dev-execute` when creating branches and crafting commit messages.
 - **`pr-template.md`** — PR title format, body structure, description style. Consumed by `/dev-execute` when opening the draft PR at start and refreshing it at wrap-up.
 - **`comment-style.md`** — style for comments on GitHub / Jira. Consumed when a slash command posts a comment externally.
@@ -105,6 +106,18 @@ Available templates (each becomes a strategy):
 - **`team-update-template.md`** — default Spanish team announcement message format. Consumed at `/dev-execute` sub-phase 4 to draft the message the user copies into team chat.
 
 To opt in to customizing a strategy for one repo, run `dev-assistant strategies customize <name>` — it copies the source default into `.dev-assistant/strategies/<name>.md`. From then on, that repo uses the local file. Delete the file to revert to the source default.
+
+## Code economy (how much code a phase is allowed to write)
+
+Nothing in the original design bounded the *size* of a change: plan sized work in commits, execute wrote what the impl plan implied, and a normal issue could land 1,300 lines without any phase noticing. The `code-economy` strategy adds that bound, and the pipeline measures against it rather than eyeballing:
+
+- **`/dev-plan`** sizes every subtask `S` / `M` / `L`, totals them, requires a written reason for any `L`, and records what the plan **deliberately left out** — the sizing question is only real if something was cut.
+- **`/dev-execute`** measures each commit before it lands (`issue size --worktree --band <planned>`). Over budget → one automatic trim pass → re-measure → still over → stop and ask (an escalation, so it fires at every autonomy level). At wrap-up, a **reduction pass** reads the issue's whole diff as one change — that is where cross-subtask duplication and one-caller abstractions show up — applies the removals that keep every passing criterion green, and commits them as one exempt `refactor` commit.
+- **`/dev-feedback`** sizes each cluster's fix. Most review fixes are `S`; an `L` "fix" is a follow-up ticket, not a bigger commit.
+- **`/dev-review`** runs an **economy** reviewer dimension producing `bloat` findings, each of which must name the smaller alternative.
+- **`/dev-evaluate`** compares planned to landed, and a repeated mis-size becomes a promoted lesson — how a repo learns its own real sizes.
+
+The counterweight is explicit in the strategy: readability is a cost like any other. Clever compression is flagged exactly as bloat is, and correctness, the objectives, and repo conventions are never traded for a smaller diff.
 
 ## Repo context (repo-owned rules dev-assistant must respect)
 
@@ -173,6 +186,7 @@ The CLI is the deterministic substrate. It does not implement phases (those are 
 - `dev-assistant issue create --id <id> --title <t> [--description <d>] [--force] [--experimental] [--autonomy <level>]` — scaffold one issue workspace. `--experimental` sets `experimental: true` in `issue.md` frontmatter; `/dev-execute` then skips all external operations (Jira, GitHub, push, PR, comments) for this issue's lifecycle. `--autonomy` (`guided` | `balanced` | `auto`, default `balanced`) sets how many checkpoints the phase commands fire — see *Autonomy levels* below.
 - `dev-assistant issue show --id <id>` — print the issue's metadata, the resolved autonomy level (an `## Autonomy` block — this is how every phase command receives the level), and which phase folders have content. Used by slash commands to load context.
 - `dev-assistant issue set-flag --id <id> [--experimental/--no-experimental] [--autonomy <level>]` — toggle the experimental flag or change the autonomy level on an existing issue's `issue.md` frontmatter. Inserts a field if absent, updates in place if present.
+- `dev-assistant issue size --id <id> [--base <ref>] [--worktree] [--band S|M|L] [--exclude <glob>]` — measure the issue's diff and band it (S/M/L) against the plan's `total_size`, or against `--band` for a single subtask. Cost is counted in **added** lines; deletions are reported but never charged. `--worktree` measures uncommitted work (tracked changes plus untracked files) so `/dev-execute` can size a commit before making it. Generated output, lockfiles, and vendored trees are excluded by default. The pure part lives in `dev_assistant/sizing.py`.
 - `dev-assistant issue archive --id <id> [--force]` — move an issue workspace from `issues/<id>/` to `archive/issues/<id>/`. Non-destructive (reversible by a manual `mv`). Updates `issue.md` frontmatter to `status: archived` with an `archived_at` timestamp. Refuses collisions unless `--force`. Used by `/dev-evaluate` sub-phase 5.4 at the user's option.
 - `dev-assistant review create --pr <n> [--url <u>] [--title <t>] [--force]` — scaffold one PR review workspace at `reviews/pr-<n>/` (reviewer-side counterpart of `issue create`). Round folders are created by `/dev-review`, not here.
 - `dev-assistant review show --pr <n>` — print the review's metadata (review.md) and per-round file progress. Called by `/dev-review` to load context at the start of a round.

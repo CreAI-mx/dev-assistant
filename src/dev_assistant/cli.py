@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -419,6 +420,162 @@ def _set_frontmatter_field(lines: list[str], key: str, value: str) -> list[str]:
             return lines
     lines.insert(closing_index, f"{key}: {value}")
     return lines
+
+
+@issue_app.command("size")
+def issue_size(
+    issue_id: Annotated[
+        str,
+        typer.Option("--id", help="Issue identifier."),
+    ],
+    base: Annotated[
+        str | None,
+        typer.Option(
+            "--base",
+            help=(
+                "Ref to diff against. Defaults to origin/<target_branch> from "
+                "plan.md, falling back to origin/develop."
+            ),
+        ),
+    ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exclude",
+            help=(
+                "Extra glob to leave out of the count (repeatable). Lockfiles, "
+                "vendored trees, and generated output are excluded by default."
+            ),
+        ),
+    ] = None,
+    worktree: Annotated[
+        bool,
+        typer.Option(
+            "--worktree",
+            help=(
+                "Measure uncommitted work (tracked changes against HEAD, plus "
+                "untracked files) instead of the branch's landed diff. Used by "
+                "/dev-execute to size a commit before making it."
+            ),
+        ),
+    ] = False,
+    band: Annotated[
+        str | None,
+        typer.Option(
+            "--band",
+            help=(
+                "Compare against this band (S/M/L) instead of plan.md's "
+                "total_size — e.g. a single subtask's planned size."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Measure the issue's diff against its planned size band.
+
+    Cost is counted in added lines; deletions are reported but never charged —
+    removing code is progress. Used by /dev-execute and /dev-evaluate so the
+    size conversation runs on a measurement rather than an impression.
+    """
+    from dev_assistant import sizing
+
+    root = _workspace_root()
+    if not root.is_dir():
+        _err(
+            f"{WORKSPACE_DIRNAME}/ not found in {Path.cwd()}. "
+            f"Run `dev-assistant init` first."
+        )
+        raise typer.Exit(code=1)
+
+    issue_dir = root / "issues" / issue_id
+    if not issue_dir.is_dir():
+        _err(f"Issue '{issue_id}' not found at {issue_dir}.")
+        raise typer.Exit(code=1)
+
+    plan_md = issue_dir / "plan" / "plan.md"
+    plan_text = plan_md.read_text() if plan_md.is_file() else ""
+    target_branch = _frontmatter_value(plan_text, "target_branch") or "develop"
+    planned_band = band or _frontmatter_value(plan_text, "total_size")
+    if planned_band and sizing.ceiling_for(planned_band) is None:
+        _err(f"Unknown band '{planned_band}'. Use S, M, or L.")
+        raise typer.Exit(code=1)
+
+    excludes = list(sizing.DEFAULT_EXCLUDES) + list(exclude or [])
+    ref = "uncommitted work" if worktree else (base or f"origin/{target_branch}")
+    numstat = _git_numstat_worktree() if worktree else _git_numstat(ref)
+    if numstat is None:
+        _err(
+            f"Could not diff against '{ref}'. Check that it exists "
+            f"(`git fetch origin`) and that this is a git repo."
+        )
+        raise typer.Exit(code=1)
+
+    size = sizing.summarize_numstat(numstat, excludes)
+    typer.echo(f"Size — {issue_id} (vs {ref})")
+    for line in sizing.render(size, planned_band):
+        typer.echo(f"  {line}")
+    if planned_band and sizing.is_overshoot(size.added, planned_band):
+        typer.echo(
+            "  Over budget: trim first (see `strategies show code-economy`), "
+            "then justify what is left."
+        )
+
+
+def _frontmatter_value(text: str, key: str) -> str | None:
+    """Read one scalar out of a leading `---` frontmatter block."""
+    if not text.startswith("---"):
+        return None
+    for line in text.splitlines()[1:]:
+        if line.strip() == "---":
+            return None
+        if line.strip().startswith(f"{key}:"):
+            value = line.split(":", 1)[1].strip().strip('"').strip("'")
+            return value or None
+    return None
+
+
+def _git_numstat_worktree() -> str | None:
+    """Numstat for uncommitted work: tracked changes plus untracked files.
+
+    `git diff` ignores untracked files, but a subagent that adds a new module
+    leaves exactly that — so untracked files are counted by hand and appended
+    in numstat form.
+    """
+    tracked = _git(["diff", "--numstat", "HEAD"])
+    if tracked is None:
+        return None
+
+    untracked = _git(["ls-files", "--others", "--exclude-standard"]) or ""
+    rows = [tracked.rstrip("\n")] if tracked.strip() else []
+    for path in untracked.splitlines():
+        path = path.strip()
+        if not path:
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="strict") as fh:
+                added = sum(1 for _ in fh)
+        except (OSError, UnicodeDecodeError):
+            rows.append(f"-\t-\t{path}")   # binary or unreadable: listed, not counted
+            continue
+        rows.append(f"{added}\t0\t{path}")
+    return "\n".join(rows) + "\n"
+
+
+def _git_numstat(ref: str) -> str | None:
+    """`git diff --numstat <ref>...HEAD`, or None when git can't answer."""
+    return _git(["diff", "--numstat", f"{ref}...HEAD"])
+
+
+def _git(args: list[str]) -> str | None:
+    """Run a read-only git command, returning None on any failure."""
+    try:
+        proc = subprocess.run(
+            ["git", *args], capture_output=True, text=True, timeout=15
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
 
 
 @issue_app.command("archive")

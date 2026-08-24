@@ -23,6 +23,10 @@ The branching strategy drives commit message format, branch naming, and commit t
 
 !`dev-assistant strategies show pr-template`
 
+### Code economy (drives subtask sizing and the smallest-plan test)
+
+!`dev-assistant strategies show code-economy`
+
 ### Output style — how to write the artifacts this phase produces
 
 !`dev-assistant strategies show output-style`
@@ -44,6 +48,10 @@ A subtask is a **logical unit of work that produces 1–3 commits**. The depende
 - **Subtasks per issue: 2–5**, biased toward the low end.
 - **Commits per subtask: 1–3**, hard cap at 3.
 - **Total commits per PR: aim 4–8**, hard backstop at 10.
+- **Size per subtask: S (≤50 added lines), M (51–150), or L (151–400)** — per the code-economy strategy above. An L subtask needs a written reason; an XL one (>400) is not a size but a signal to split.
+- **Size per issue: S or M for normal work.** More than one L subtask, or a total past ~400 added lines, means the issue should be split rather than absorbed.
+
+Commits measure *how the work is grouped*; size measures *how much code it costs*. They are independent — a 1-commit subtask can be L, and a 3-commit subtask can be S. Plan both.
 
 When a subtask would need 4 commits, that's a signal it should be two subtasks. When a subtask is "really just one commit," set `commits: 1`.
 
@@ -126,7 +134,7 @@ Propose a first-pass decomposition: 2–5 subtasks at a high level. Don't fill i
 
 Present a table to the user with one row per subtask:
 
-| # | Title (imperative) | One-line purpose | Covers objectives | Estimated commits (1–3) |
+| # | Title (imperative) | One-line purpose | Covers objectives | Commits (1–3) | Size (S/M/L) |
 
 Constraints to enforce:
 
@@ -135,6 +143,7 @@ Constraints to enforce:
 - **Every subtask must trace to ≥1 objective.** If a proposed subtask doesn't, flag it as scope creep — drop it or fold it into another.
 - **Each commit's type (set in sub-stage 3) must be one of the types listed in the loaded branching-strategy.** A `feat/` branch should carry predominantly `feat | refactor | test | chore | docs` types; `fix` only when the issue is bug-driven.
 - **Estimated commit total across all subtasks should aim for 4–8, hard backstop at 10.** If the early estimate is above 10, you're either oversizing subtasks (split the issue) or over-committing within them (merge logically related commits).
+- **Size every subtask, and total them.** Estimate from what the change actually touches, not from ambition: which existing functions change, what genuinely has to be new, what tests the objectives require. If the total lands past M, the first question is not "how do we fit it" but **"what in this plan isn't required by an objective?"**
 
 **At `guided`: pause for user input.** Iterate with the user — "merge 1 and 2", "subtask 4 only needs 1 commit not 3", "you're missing coverage of O3" — until the shape settles.
 
@@ -152,7 +161,8 @@ For each subtask, produce:
 - **Objectives** (1–3 lines) — what done looks like for this specific subtask
 - **What's affected** — files / modules / external systems this subtask touches. **Keep to ≤4 bullets** (slightly more permissive than the per-commit rule since a subtask can span multiple commits). If you can't, the subtask is hiding a fourth commit — split into two subtasks.
 - **Passing criteria** — 3–5 checkbox items. Each one is something `/dev-execute` will be able to verify mechanically (a file exists, a test passes, a function returns X). Criteria are at the subtask level, not per-commit.
-- **Strategies that apply** — list by name (e.g. `[branching-strategy, output-style]`); never embed their content
+- **Strategies that apply** — list by name (e.g. `[branching-strategy, code-economy, output-style]`); never embed their content. `code-economy` applies to every subtask that writes code
+- **Size** — `S`, `M`, or `L`, with the rough split (e.g. `M — ~90 src, ~40 test`). Derive it from *what's affected*: a subtask touching three existing functions plus their tests is S or M; if you find yourself estimating L, name the objective that requires the new component, or split the subtask. Never write `L` without that sentence.
 - **Commit count** — at `guided`, confirm with the user: "1, 2, or 3 commits for this subtask?" At `balanced` / `auto`, set it yourself from what the work actually needs and state the reasoning in one clause (it shows up in the checkpoint table). Default to the estimate from sub-stage 2 either way. Hard cap at 3.
 - **Commit message previews** — one per commit. Each follows the loaded branching strategy's Conventional Commits format:
   - Type: from the strategy's allowed types (`feat | fix | refactor | chore | docs | test | perf | ci`), chosen per commit based on what that specific commit does
@@ -191,6 +201,9 @@ The final rigor pass + write.
 - Dependency graph is acyclic and well-formed
 - Subtask count is in the 2–5 band
 - No subtask has more than 3 commits (`commits` field ≤3)
+- Every subtask has a `size` of `S`, `M`, or `L` — never `XL`, which means it must be split
+- Every `L` subtask carries a one-sentence justification naming the objective that requires it
+- The issue total is within budget: at most one `L`, and an estimated total at or under ~400 added lines. Above that, propose splitting the issue or cutting scope — don't record an over-budget plan as if it were fine
 - Total commits across all subtasks ≤10 (backstop against giant PRs) — **waived in `sub-branches` mode** (each sub-PR is ≤3 commits by construction); a total above 10 in `single-branch` mode is instead a prompt to switch to `sub-branches` or split the issue
 - Each commit's `type` is in the branching strategy's allowed types
 - Commit types match branch purpose (on a `feat/` branch, no `fix` unless the issue is bug-driven; on a `hotfix/` branch, predominantly `fix`)
@@ -205,6 +218,7 @@ If any mechanical check fails, loop back to whichever sub-stage needs to change 
 2. *"External dependencies — any other tickets, people, APIs, feature flags we haven't called out?"*
 3. *"What's the riskiest subtask, and what's plan B if it doesn't pan out?"*
 4. *"Would you be surprised if this took two times as long as the plan suggests?"*
+5. *"Is this the smallest plan that covers the objectives?"* — the code-economy question, and the one to answer in writing at every level. Name at least one thing you considered including and deliberately left out (an abstraction, a config surface, a test matrix, a refactor of adjacent code). If nothing was left out, the plan probably absorbed scope it shouldn't have; look again at what each subtask exists for.
 
 - At `guided`: ask them one at a time. If the user surfaces issues, loop back to the relevant earlier sub-stage.
 - At `balanced` / `auto`: **answer them yourself, in writing**, and put your answers in the checkpoint view and in `report.md`'s viability section. Question 2 is the one you cannot fully answer alone — say so explicitly rather than filling it with a guess, and if the answer would change the plan, ask. A rubric you rubber-stamp is worse than no rubric: if question 4's honest answer is "yes, I would not be surprised", say that and explain which subtask is the reason.
@@ -216,9 +230,11 @@ If any mechanical check fails, loop back to whichever sub-stage needs to change 
 **At `balanced`:** this is the phase's single checkpoint. One view, containing:
 
 ```
-Plan for <issue-id> — <N> subtasks, <M> commits, <flow> flow, <branching_mode> → <target_branch>
+Plan for <issue-id> — <N> subtasks, <M> commits, size <S|M|L>, <flow> flow, <branching_mode> → <target_branch>
 
-  Decomposition        | # | Title | Covers | Commits |   (the sub-stage 2 table, final)
+  Decomposition        | # | Title | Covers | Commits | Size |  (the sub-stage 2 table, final)
+  Size budget          | <n> S · <n> M · <n> L → issue total <S|M|L> (~<n> added lines)
+                       | deliberately left out: <what economy cut>
   Per-subtask specs    | objectives, files affected, passing criteria, commit previews
   Sequencing           | dependency graph, branch slug, coverage map
   Viability            | my answers to the four rubric questions, including what I could not answer
@@ -251,7 +267,11 @@ One paragraph: what we set out to plan, how the decomposition crystallized, the 
 
 ## Decomposition approach
 
-How the objectives were mapped to subtasks. Which decompositions were tried before settling on this one. Why this number of subtasks rather than fewer or more. How commits-per-subtask were decided (when the work clusters into a single commit vs spans 2–3).
+How the objectives were mapped to subtasks. Which decompositions were tried before settling on this one. Why this number of subtasks rather than fewer or more. How commits-per-subtask were decided (when the work clusters into a single commit vs spans 2–3). How each subtask was sized, and what drove any `L`.
+
+## Scope deliberately excluded
+
+What this plan could have included and does not, per the code-economy strategy: abstractions not built, configuration not exposed, adjacent code not refactored, test matrices not expanded. One line each, with the reason. This section is the plan's defence against absorbing scope — an empty one means the sizing question was not really asked.
 
 ## Sequencing rationale
 
@@ -288,6 +308,8 @@ branching_mode: <single-branch | sub-branches>
 target_branch: <develop | uat | per-repo override>
 total_subtasks: <n>
 total_commits: <sum of commits across subtasks>
+total_size: <S | M | L>
+est_added_lines: <rough sum across subtasks>
 ---
 
 # Plan — $ARGUMENTS
@@ -301,6 +323,15 @@ See [report.md](./report.md) for the planning process, alternatives, and viabili
 - **Branching mode**: `single-branch` (subtasks land as commits on the feature branch; draft PR → target at start, marked Ready at wrap-up) or `sub-branches` (each subtask gets `feat/$ARGUMENTS-<slug>-sub-N` off the feature branch with its own sub-PR at completion; parent draft PR → target at start, marked Ready at wrap-up)
 - **Target branch**: `<target_branch>`, resolved from the branching strategy (`<which document/section it came from>`). `/dev-execute` verifies it exists on `origin` before branching and every branch/rebase/PR operation uses it — nothing downstream hardcodes `develop`.
 - **GitHub issue**: not yet created — `/dev-execute` creates it on the first subtask. One GH issue per Jira parent ticket, regardless of branching mode (Jira subtasks never get their own GH issue)
+
+## Size budget
+
+| Subtask | Size | Rough split | Reason (required for L) |
+|---|---|---|---|
+| 01 | M | ~90 src / ~40 test | — |
+| 02 | S | ~30 src / ~15 test | — |
+
+**Issue total: `<S|M|L>` (~`<n>` added lines).** Measured at execute with `dev-assistant issue size --id $ARGUMENTS`; deletions are not charged.
 
 ## Coverage map
 
@@ -322,9 +353,10 @@ See [report.md](./report.md) for the planning process, alternatives, and viabili
 - **id:** 01
 - **depends_on:** []
 - **covers_objectives:** [O1]
-- **strategies:** [branching-strategy, output-style]
+- **strategies:** [branching-strategy, code-economy, output-style]
 - **status:** pending
 - **commits:** 2
+- **size:** M — ~90 src, ~40 test
 
 **Objectives**
 

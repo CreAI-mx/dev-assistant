@@ -81,10 +81,12 @@ The file states it outright: *"Every sub-stage has a user pause."*
 | E9 | 2.2 (`:232`) | Mechanical checks still failing after 2 re-drafts → approve / abandon / edit | E | rare |
 | E10 | 2.3 (`:247`) | **Impl plan: approve / refine / abandon** | A | ×N |
 | E11 | 3.2 (`:290`) | Files touched outside the plan → surfaced to the user | E | rare |
+| E11b | 3.2 | **Still over the size budget after the automatic trim pass** → trim more / accept / re-plan / split | E | occasional |
 | E12 | 3.3 (`:299`) | Commit failed (hook, conflict) → stop | E | rare |
 | E13 | 3.6 (`:335`) | Passing criteria still failing after one auto-fix → retry / reset / abandon | E | rare |
 | E14 | 3.8 (`:382`) | `sub-branches`: push parent, push sub-branch, open sub-PR, Jira subtask comment | G | 4×N |
 | E15 | 4.2 (`:429`) | "Handle deferred external prep now?" + one prompt per item | G | 1 |
+| E15b | 4.2b | Reduction pass — proposed removals over the issue's whole diff (`guided` only; applied and reported at `balanced` / `auto`, since a verified deletion needs no approval) | A | 1 |
 | E16 | 4.3 (`:442`) | Rebase conflicts → hard stop | E | rare |
 | E17 | 4.4 (`:453`) | Push (force-with-lease, post-rebase) | G | 1 |
 | E18 | 4.5 (`:464`) | Update PR body + mark ready for review | G | 1 |
@@ -182,7 +184,7 @@ Each phase command carries its own `## Autonomy level` section with this table f
 - **refine** — the exploration conversation is untouched (this is the part that works). R1, R5, R6, R7 collapse into **one checkpoint**: chosen direction + rewritten title/description + report preview, approved together; approval releases the Jira write. **6 → 1.**
 - **gather** — G1 (sources) and G5 (direct input, asked as one block of 5 questions) stay. G2, G6, G7, G8, G9 collapse into **one checkpoint**: the drafted `objectives.md` + `report.md` preview + the process-objective exclusions, approved together. **9 → 3** (two of them the irreducible content stops; `auto` drops the checkpoint, leaving 2).
 - **plan** — the whole plan is drafted end to end and shown **once**: decomposition, per-subtask specs, commit counts, sequencing, flow, branching mode, coverage map, and the assistant's own answers to the four viability questions (marked as self-answered). Approve / revise / restart. **17 → 1.**
-- **execute** — per invocation: **one approval** (the impl plan) and **one external batch** (GH issue, Jira subtask, push, PR, Jira comment — everything 1a/1c/4.x would ask separately, shown as one list of ops with their payloads). **7 → 2 on the first subtask, 2 → 2 later, 5 → 1 at wrap-up.**
+- **execute** — the reduction pass at wrap-up (4.2b) is an approval at `guided` only: at `balanced` / `auto` its removals are applied and reported, because a deletion that keeps every passing criterion green is the one edit that needs no sign-off. A size overshoot that survives the automatic trim is an escalation and stops at every level. Otherwise, per invocation: **one approval** (the impl plan) and **one external batch** (GH issue, Jira subtask, push, PR, Jira comment — everything 1a/1c/4.x would ask separately, shown as one list of ops with their payloads). **7 → 2 on the first subtask, 2 → 2 later, 5 → 1 at wrap-up.**
 - **feedback** — **one approval** after sub-phase 3 (triage + every cluster impl-plan + every drafted reply in a single view) and **one external batch** after the fixes commit (final replies with their SHAs + push + post + resolve + commit map). The batch-reply rule survives intact: no reply posts before the whole set is reviewed. **9 → 2 per round.**
 - **merge** — readiness ✗ still stops. The merge-commit message, branch deletion, and Jira comment become **one confirmation**. A hotfix still confirms twice (two merges = two irreversible acts). **4 → 2.**
 - **evaluate** — retro + lessons + the external batch in **one view**, approved together; archiving becomes the default (reversible, recorded). **3 → 1.**

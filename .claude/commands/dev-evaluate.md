@@ -141,6 +141,25 @@ Read `gathering/objectives.md` — both the general objective and the specific i
 - **Evidence** — point at execution-notes commits, verified criteria, feedback-round outcomes
 - **If not landed** — why
 
+### 2.1b — Size against plan
+
+Read `plan.md`'s `total_size` / `est_added_lines`, each subtask's `size`, every `execution-notes.md` `size_outcome`, the wrap-up report's `## Size`, and each feedback round's `added_lines`. Then measure reality:
+
+```
+dev-assistant issue size --id <issue-id>
+```
+
+(After a merge, pass `--base <merge_commit>^1` or the recorded `branch_base` — the branch may be gone.)
+
+Produce the comparison the retro needs:
+
+- **Planned vs landed**, per subtask and for the issue: band, added, deleted.
+- **Where the growth came from** — which subtask overshot, what was accepted and why, how much the review rounds added on top (a plan that lands at M and leaves feedback at L is a review-scope problem, not a planning one).
+- **What the reduction pass removed**, and whether it ran at all.
+- **Whether the size was ever discussed** — an issue that overshot with nobody noticing is a different finding from one that overshot after an explicit accept.
+
+Two lines of judgment, not just numbers: was the extra code *required by the objectives*, and would the same plan be sized differently now?
+
 ### 2.2 — Drift from plan
 
 Compare `plan/plan.md` against actual execution + feedback:
@@ -167,6 +186,10 @@ pr_url: <url or null>
 pr_state: <merged | closed-unmerged | open | n/a>
 total_subtasks: <n>
 total_feedback_rounds: <n>
+planned_size: <S | M | L>
+landed_added_lines: <n>
+landed_deleted_lines: <n>
+size_verdict: <within | over-accepted | over-unnoticed>
 total_commits: <n>
 experimental: <true | false>
 ---
@@ -188,6 +211,10 @@ What GitHub/Jira actually showed at evaluation time (from the sub-phase 1 verifi
 | <general objective> | <yes/partial/no> | <ref> |
 | <specific 1> | <yes/partial/no/deferred> | <ref> |
 | ... |
+
+## Size
+
+Planned vs landed for the issue and per subtask, from 2.1b. Where the growth came from, what the reduction pass removed, what was accepted and why. If the issue landed a band above plan, this section says whether the plan was wrong or the execution was — those have different lessons.
 
 ## Drift from plan
 
@@ -230,6 +257,8 @@ These are surfaced in the GH closure comment so they don't get lost.
 
 ### 3.2 — Draft `evaluation/lessons.md` (the per-issue decision artifact)
 
+**Size is a standing lesson candidate.** When `size_verdict` is anything but `within`, draft a lesson for it — category `technical` when the code itself was bigger than it needed to be, `process` when the *plan* was the thing that mis-sized. Make it specific and reusable: *"OAuth-style subtasks that add a provider plus registration land M, not S — the registration and its test are ~40 lines on their own"* teaches the next plan something. *"Write less code"* teaches nothing and should not be written. Two recurrences of the same size lesson auto-flag it for promotion (5.2), which is exactly how a repo learns its own real sizes.
+
 ```markdown
 ---
 issue: <issue-id>
@@ -268,6 +297,9 @@ Outcomes:
   - <general objective>: <landed/partial/no>
   - <X> of <Y> specific items landed
   - <N> deferred to follow-up tickets
+
+Size:
+  - planned <band> (~<n> lines) → landed +<n> / -<n> (<band>), <verdict>
 
 Drift:
   - <one-line summary>
@@ -384,6 +416,7 @@ Assemble everything that's about to fire into one consolidated view.
 ```
 RETRO — <issue-id>   (files: evaluation/retro.md, evaluation/lessons.md)
   Outcomes:  <general objective>: <landed/partial/no> · <X>/<Y> specific · <N> deferred
+  Size:      planned <band> → landed +<n> / -<n> (<band>), <verdict>
   Drift:     <one line>
   Lessons:   01 (process) <title> · 02 (technical) <title> · 03 (collaboration) <title>
   Decided without review: <one line>

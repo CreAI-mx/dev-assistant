@@ -187,7 +187,7 @@ The retrospective — closes the loop and captures what was learned.
 
 ### Strategies: defaults you can override per repo
 
-The assistant's conventions — branching, PR template, comment style, Jira/GH issue templates, output style — live as **strategy** documents. Each resolves per-repo-override-first:
+The assistant's conventions — branching, PR template, comment style, Jira/GH issue templates, output style, code economy — live as **strategy** documents. Each resolves per-repo-override-first:
 
 ```bash
 dev-assistant strategies show branching-strategy         # what's in effect here
@@ -213,6 +213,36 @@ Also decided at plan time (`branching_mode`):
 
 - **`single-branch`** (default) — all subtasks land as commits on one branch, one PR.
 - **`sub-branches`** — each subtask gets its own `-sub-N` branch and sub-PR targeting the parent feature branch, merged sequentially; the parent PR to `develop` collects them. Recommended when the commit estimate pushes past 8–10 or subtasks are independently reviewable.
+
+### Code economy: how much code the phases write
+
+Every subtask carries a size band, and the pipeline measures rather than guesses:
+
+| Band | Added lines |
+|---|---|
+| `S` | ≤ 50 |
+| `M` | 51–150 |
+| `L` | 151–400 (needs a written reason in the plan) |
+| `XL` | > 400 — not a size, a signal to split the subtask |
+
+Deletions are never charged: a `+40 / -90` change is a small change. Lockfiles, generated output, and vendored trees don't count.
+
+```bash
+dev-assistant issue size --id PROJ-123                 # landed diff vs the target branch
+dev-assistant issue size --id PROJ-123 --worktree --band S   # uncommitted work vs one subtask's budget
+```
+
+What each phase does with it:
+
+- **plan** sizes every subtask and writes down what it deliberately left out.
+- **execute** measures each commit before it lands; over budget it trims once by itself, and only stops to ask if it's *still* over. At wrap-up it runs a **reduction pass** over the issue's whole diff — the one-caller abstraction and the duplicate tests only become visible at that scale — and removes what it can while every passing criterion stays green.
+- **feedback** keeps review fixes proportionate: an `L` "fix" for a review comment is a follow-up ticket, not a bigger commit.
+- **review** runs an economy dimension that produces `bloat` findings, each naming the smaller alternative.
+- **evaluate** compares planned to landed; a mis-size that keeps recurring becomes a promoted lesson.
+
+The balance is written into the strategy, not left implicit: **when the shorter version takes longer to explain, the longer one wins.** Clever compression — dense comprehensions, chained ternaries, one-letter names — is flagged exactly like bloat. Correctness, the objectives, repo conventions, boundary validation, and tests for named failure modes are all explicitly exempt.
+
+Customize the whole standard per repo with `dev-assistant strategies customize code-economy` — including the band ceilings if your repo's work is shaped differently.
 
 ### Autonomy: how much the phases ask you
 
@@ -287,6 +317,7 @@ The CLI is the deterministic layer under the slash commands; you'll mostly use i
 | `dev-assistant commands install` | Symlink the `/dev-*` slash commands into `.claude/commands/` |
 | `dev-assistant issue create --id <ID> --title <T> [--experimental] [--autonomy guided\|balanced\|auto]` | Create an issue workspace |
 | `dev-assistant issue show --id <ID>` | Phase-by-phase progress of one issue |
+| `dev-assistant issue size --id <ID> [--worktree] [--band S\|M\|L]` | Measure the diff and band it against the plan |
 | `dev-assistant issue set-flag --id <ID> --experimental/--no-experimental [--autonomy <level>]` | Toggle experimental mode / change the autonomy level |
 | `dev-assistant issue archive --id <ID>` | Move a finished workspace to `archive/` (reversible) |
 | `dev-assistant strategies show\|customize <name>` | Inspect / override a strategy for this repo |

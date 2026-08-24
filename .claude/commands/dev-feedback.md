@@ -57,6 +57,12 @@ If any check fails, stop. Do not attempt sub-phase 1.
 
 !`dev-assistant strategies show branching-strategy`
 
+### Code economy (drives how big a fix is allowed to get)
+
+!`dev-assistant strategies show code-economy`
+
+Review rounds are where issues quietly double in size: a comment asks for a rename and the fix arrives as a refactor. Every cluster's fix is sized, and **a fix that outgrows its comment is a follow-up ticket, not a bigger commit** — see sub-phase 3.2.
+
 ### Output style — how to write the artifacts this phase produces
 
 !`dev-assistant strategies show output-style`
@@ -314,6 +320,15 @@ status: planned
 
 ### 3.2 — Draft `impl-plan.md` (only for `action: code-fix` clusters)
 
+Each cluster's plan carries a **size band** (`S` ≤50 added lines / `M` ≤150 / `L` ≤400) alongside its approach, and the scope rule that goes with it:
+
+- **Most review fixes are S.** A nit is a handful of lines; a bug fix is usually one function and its test.
+- **An `M` fix needs a sentence** saying why the comment requires that much.
+- **An `L` fix is not a fix.** If a review comment can only be satisfied by an L change, it is a new piece of work: reply saying so, propose a follow-up ticket, and mark the cluster `discussion-deferred` rather than landing a refactor inside a review round. The exception is a reviewer explicitly asking for the big change — then it belongs in the round, sized honestly, and flagged in the round report.
+- **The comment is the scope.** Fix what was raised. Adjacent code you noticed while in there is a separate ticket; say so in the reply if it matters.
+
+Measure before committing, the same way `/dev-execute` 3.2 does: `dev-assistant issue size --id <issue-id> --worktree --band <cluster band>`. Over budget → one trim pass → still over → stop and ask (an escalation, so it fires at every autonomy level).
+
 Read the files referenced by the comments to understand current state. Then write `impl-plan.md`:
 
 ```markdown
@@ -374,10 +389,12 @@ After all clusters are planned, report to the user:
 
 ```
 Planned K clusters:
-  - 01 oauth-redirect-bug (blocking-correctness · code-fix · 1 commit, 1 reply)
-  - 02 redirect-tests (blocking-design · code-fix · 1 commit, 2 replies)
-  - 03 style-nits-auth (nit · code-fix · 1 commit, 3 replies)
+  - 01 oauth-redirect-bug (blocking-correctness · code-fix · 1 commit, 1 reply · S)
+  - 02 redirect-tests (blocking-design · code-fix · 1 commit, 2 replies · S)
+  - 03 style-nits-auth (nit · code-fix · 1 commit, 3 replies · S)
   - 04 jose-question (question · reply-only · 1 reply)
+
+Round size estimate: ~<n> added lines.
 
 Files at feedback/round-NN/clusters/*/
 
@@ -401,10 +418,11 @@ TRIAGE
   03 style-nits-auth      nit · style                    → code-fix (1 commit, 3 replies)
   04 jose-question        question                       → reply-only (1 reply)
 
-PLANS (code-fix clusters)
-  01 → auth.py — store state on session before redirect; fix(auth): …
-  02 → tests/test_auth.py — add expired-token case; test(auth): …
-  03 → auth.py, parser.py — naming pass; style(auth): …
+PLANS (code-fix clusters)               size
+  01 → auth.py — store state on session before redirect; fix(auth): …      S
+  02 → tests/test_auth.py — add expired-token case; test(auth): …          S
+  03 → auth.py, parser.py — naming pass; style(auth): …                    S
+                                          round total: ~<n> added lines
 
 DRAFTED REPLIES  (final wording; commit SHAs filled in after the fixes land)
   <the same per-thread view as 5.1, reviewer quote + drafted reply>
@@ -435,6 +453,7 @@ Cluster 01 (oauth-redirect-bug, blocking-correctness · bug):
   Approach: <one sentence>
   Files: auth.py
   Commit: fix(auth): preserve state param through OAuth redirect
+  Size: S (planned S)
   Replies queued: 1
 
 Full plan at feedback/round-NN/clusters/01-oauth-redirect-bug/impl-plan.md
@@ -664,6 +683,9 @@ clusters_reply_only: <n>
 clusters_deferred: <n>
 threads_resolved: <n>
 commits_added: [<sha1>, <sha2>, ...]
+added_lines: <n>
+deleted_lines: <n>
+clusters_deferred_as_too_big: <n>
 remote_state:
   replies_confirmed: <n>/<n>
   branch_in_sync: <true | false>

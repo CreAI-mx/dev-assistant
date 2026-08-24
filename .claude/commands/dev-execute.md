@@ -34,7 +34,7 @@ Read `.dev-assistant/issues/<issue-id>/issue.md` and check for `experimental: tr
 - **Sub-phase 1c** (draft PR at start): never runs — no push, no PR.
 - **Branching mode**: forced to `single-branch` behavior regardless of `plan.md`'s `branching_mode` — sub-PRs can't open without external ops, so sub-branches would be pointless. Note this to the user if the plan says `sub-branches`.
 - **Sub-phase 3.8** (sub-PR): never runs (follows from the forced single-branch behavior).
-- **Sub-phase 4** (wrap-up): rebase, push, PR ready, and Jira comment are all SKIPPED. Wrap-up report and team message are still written locally.
+- **Sub-phase 4** (wrap-up): rebase, push, PR ready, and Jira comment are all SKIPPED. The reduction pass (4.2b), wrap-up report, and team message still run — they are local. Size is measured against `branch_base` instead of `origin/<target_branch>`.
 
 Surface "experimental mode active — external ops will be skipped" up front so the user knows what's happening.
 
@@ -60,6 +60,12 @@ Surface both up front: *"Flow: feature · target branch: `develop` (from plan.md
 ### Comment style (drives Jira/GH comments)
 
 !`dev-assistant strategies show comment-style`
+
+### Code economy (drives how much code gets written, and the reduction pass)
+
+!`dev-assistant strategies show code-economy`
+
+**This one binds the code, not the prose.** Every impl plan, every subagent dispatch, and every diff review in this phase applies it. Size is measured, not eyeballed: `dev-assistant issue size --id <issue-id> [--worktree] [--band S|M|L]`.
 
 ### GH issue template (drives the GH issue body at sub-phase 1a — first subtask only)
 
@@ -246,6 +252,7 @@ issue: <issue-id>
 subtask: <N>
 status: pending
 autonomy: <guided | balanced | auto>
+size: <S | M | L>          # from plan.md's subtask spec
 iterations: 1
 ---
 
@@ -253,6 +260,12 @@ iterations: 1
 
 ## Approach
 2–4 sentences. Concrete, names specific functions/classes/files. Not vague.
+
+## Size budget
+Planned band from `plan.md` (`S` ≤50 / `M` ≤150 / `L` ≤400 added lines) and how this approach fits inside it — roughly how many lines per file, split src vs test. If the approach doesn't fit, say so **here**, before any code exists: either the approach is doing more than the subtask asks, or the plan under-sized it. Both are worth one sentence now instead of an overshoot later.
+
+## What this deliberately does not do
+Per the code-economy strategy: the abstraction not introduced, the config surface not added, the adjacent code not refactored, the extra test cases not written. One line each. An empty section here almost always means the plan absorbed something it shouldn't.
 
 ## Files to touch
 - `actual/path/file.py` — what changes here
@@ -285,6 +298,8 @@ Run these against the drafted plan:
 - Files in `files to touch` that aren't in `what's affected` are flagged as drift (don't silently expand scope)
 - Files referenced in the approach actually exist in the repo (or are explicitly marked "new file")
 - Commit count in the plan matches the subtask's `commits:` field (or drift is noted)
+- The plan's `size:` matches the subtask's planned band, and the approach plausibly fits it — a plan that introduces a new class, its registry entry, and a test matrix is not an `S`
+- Nothing in the approach is unrequired by a passing criterion or an objective (code-economy checklist items 1–10). Anything that is gets moved to *What this deliberately does not do*
 - Each commit's `<type>` is in the branching-strategy's allowed types
 
 If any check fails: orchestrator re-drafts the plan addressing the specific failure. **Capped at 2 internal re-drafts.** Append each iteration to `impl-plan-log.md` in the same folder (frontmatter `iteration:`, then the full plan + checks results).
@@ -303,7 +318,8 @@ Display a **summary** of the impl plan (not the whole file):
 Implementation plan for subtask N:
   Approach: <one sentence>
   Files: file1.py, file2.py, test.py
-  Commits: 2
+  Commits: 2   ·   Size: M (planned M — ~90 src / ~40 test)
+  Not doing: <the one-line version of "deliberately does not do">
   Drift: <one line, or "none">
   Gotchas: <one line, or "none">
 
@@ -333,12 +349,15 @@ Dispatch the **Agent tool** with these parameters:
 - `subagent_type: general-purpose`
 - `description`: "Write code for subtask `N`, commit `K`"
 - Model: `sonnet` (per-repo execute model default; configurable later)
-- `prompt`: the full impl plan + the specific commit's scope + relevant file contents + instructions:
+- `prompt`: the full impl plan + the specific commit's scope + relevant file contents + **the code-economy strategy text loaded above** + instructions:
   - "Make the file changes described for commit K of this impl plan."
+  - "Write the least code that satisfies the plan and stays obvious to the next reader. The strategy above is binding: extend existing code before adding files, no abstraction before the third occurrence, no configurability the plan doesn't name, no defensive checks for states the caller rules out, one test per behavior plus the named failure modes, comments explain why and not what."
+  - "When the shorter version takes longer to explain, write the longer one. Short and obvious beats short and clever."
+  - "This commit's budget is roughly <n> added lines. If you find yourself well past it, stop and report what is driving the size instead of writing more."
   - "Do not commit, do not push, do not touch git. Just write the files."
-  - "Output: a brief summary of what you changed and which files."
+  - "Output: a brief summary of what you changed, which files, and anything you left out on purpose."
 
-### 3.2 — Orchestrator reviews diff
+### 3.2 — Orchestrator reviews diff (and sizes it)
 
 After the subagent returns:
 
@@ -346,6 +365,38 @@ After the subagent returns:
 - Brief sanity check:
   - Are only the files in `files to touch` touched? If extras appear, surface to user.
   - Are the changes plausibly aligned with the commit's intent? (Not a full code review — just a "does this look like what we asked for" pass.)
+- **Measure it** — the work is uncommitted, so:
+
+  ```
+  dev-assistant issue size --id <issue-id> --worktree --band <subtask's planned band>
+  ```
+
+  Report the one-line result: *"+118 / -12, band M vs planned M — within budget."*
+
+**If the measurement says over budget** (more than 25% past the band's ceiling), run **one trim pass** before committing — don't ask first, and don't just accept it:
+
+1. Read the diff against the code-economy checklist and list what can go: an abstraction used once, a wrapper that only forwards, config nobody asked for, defensive checks for impossible states, tests that repeat each other, comments restating code, anything absent from *files to touch* or from the passing criteria.
+2. Apply the removals yourself (local edits, no confirmation needed) — or dispatch the Agent with the specific list when the trim is substantial.
+3. Re-measure with the same command, and re-run any tests the subtask's passing criteria name. **A trim that breaks a criterion is not a trim — revert it.**
+4. Report what came out: *"trimmed 46 lines — dropped the ProviderRegistry wrapper and three duplicate tests. Now +72 / -12, band M."*
+
+**If it is still over budget after the trim, stop and ask** — at every autonomy level, `auto` included. This is an escalation, not an approval: the plan and the code disagree about how big this is, and only the user can settle which one is wrong.
+
+```
+Subtask N is over its size budget after trimming.
+  Planned: M (≤150 added)      Landed: 214 added / 12 deleted
+  What's driving it: <the honest reason — e.g. "the callback needs its own
+  error taxonomy; the plan assumed one exception type">
+  Already trimmed: <what came out in the pass above>
+
+Options:
+  (a) Trim further — tell me what to cut, or I'll propose a deeper list
+  (b) Accept — the size is justified; I'll record the reason in the plan and the notes
+  (c) Re-plan the subtask — the impl plan was wrong about the shape of this
+  (d) Split — land what's coherent now, move the rest to a follow-up ticket
+```
+
+Record the outcome in `execution-notes.md` either way. An accepted overshoot with a written reason is fine; an unnoticed one is what produces a 1,300-line issue.
 
 ### 3.3 — Commit
 
@@ -409,6 +460,10 @@ autonomy: <guided | balanced | auto>
 commits: <count>
 commit_shas: [sha1, sha2, ...]
 verified_criteria: <passed>/<total>
+planned_size: <S | M | L>
+added_lines: <n>
+deleted_lines: <n>
+size_outcome: <within | trimmed | accepted-over | re-planned>
 ---
 
 # Execution notes — Subtask <N>
@@ -427,6 +482,9 @@ What deviated, if anything.
 - [✓] criterion 1
 - [✗] criterion 2 — <reason>
 - [manual] criterion 3 — needs human eyes
+
+## Size
+Planned band vs landed (`+<added> / -<deleted>`). What the trim pass removed, if it ran. If the overshoot was accepted, the reason — in the user's words where they gave one.
 ```
 
 Update `plan.md` subtask frontmatter: `status: done`.
@@ -494,6 +552,37 @@ Otherwise: scan all subtasks for incomplete external prep.
 **At `guided`:** if anything is incomplete, ask *"Handle deferred external prep now before PR opens? Options: yes (one prompt per item), no (proceed without)."* If yes, walk each item with the same flow as sub-phase 1a; if no, proceed with whatever state is recorded.
 
 **At `balanced` / `auto`:** don't ask separately. Draft the payloads for the incomplete items and put them at the top of the **wrap-up external batch** (4.4–4.6 below), where the user can drop any of them by number. Items dropped there stay recorded as incomplete in the wrap-up report.
+
+### 4.2b — Reduction pass (always runs; local only)
+
+The subtasks were each sized on their own. Nobody has yet read the issue's diff **as one change** — and that is where accumulated bloat lives: the helper two subtasks both grew, the abstraction that made sense in subtask 1 and has one caller, the tests that overlap across subtasks, the interface that ended up wider than anything uses.
+
+1. **Measure the whole issue:**
+
+   ```
+   dev-assistant issue size --id <issue-id>
+   ```
+
+   (Against `origin/<target_branch>`; in experimental mode pass `--base <branch_base>`.) Report planned vs landed: *"Issue total: +412 / -58, band L vs planned M."*
+
+2. **Read the full diff** — `git diff origin/<target_branch>...HEAD` — as a reviewer seeing it for the first time, against the code-economy checklist. Look for what only shows up at issue scale:
+   - Functions, classes, or files with exactly one caller that could be inlined
+   - Two subtasks that grew near-duplicate helpers
+   - An abstraction introduced for a second occurrence that never got a third
+   - Tests asserting the same behavior from different subtasks
+   - Options, flags, or parameters nothing in the diff passes
+   - Docstrings and comments that restate their code
+   - Code no passing criterion and no objective requires
+
+3. **Propose the removals as a list**, each with the line count it saves and the criterion or objective that proves it is safe to remove.
+
+4. **Apply and verify.** Local edits, no confirmation needed. Then **re-run every subtask's passing criteria** (they are in `plan.md`). A removal that breaks one is reverted, no argument. Commit what survives as one commit — `refactor(<scope>): Trim <what>` with a `- remove:` bullet per item, `refs <issue-id>`. **This commit is exempt from the commit budget** — it subtracts.
+
+5. **If nothing should come out, say so in one line** and move on: *"Reduction pass: nothing to remove — the diff is what the objectives require."* That is a legitimate outcome; a pass that always finds something is a pass that is inventing work.
+
+At `guided`, show the proposed removals and wait before applying. At `balanced` / `auto`, apply the ones that are clearly safe (verified by the criteria) and report what came out — deletions that keep every criterion green are the one edit that never needs approval.
+
+Record the outcome for the wrap-up report: lines removed, what was removed, what was left and why.
 
 ### 4.3 — Rebase (skipped in experimental mode)
 
@@ -623,6 +712,10 @@ pr_url: <url or null>
 target_branch: <develop or "experimental">
 total_subtasks: <n>
 total_commits: <count>
+planned_size: <S | M | L>
+added_lines: <n>
+deleted_lines: <n>
+reduction_removed_lines: <n>
 experimental: <true | false>
 ---
 
@@ -648,6 +741,10 @@ One paragraph: what was achieved against the original objectives from `gathering
 - Sub-PRs: [list of merged sub-PR URLs per subtask, or "n/a (single-branch)"]
 - Branch: <branch> → <target>
 
+## Size
+
+Planned band vs landed (`+<added> / -<deleted>`, measured with `dev-assistant issue size`). Per-subtask outcomes (within / trimmed / accepted-over). What the reduction pass removed, and what it deliberately left. If the issue landed a band above plan, the honest reason — this is the number `/dev-evaluate` retrospects and the one that turns into a lesson when it keeps happening.
+
 ## Deviations from plan
 
 Differences between what `plan.md` proposed and what actually got committed.
@@ -667,7 +764,7 @@ Terse summary to the user:
 
 ```
 Wrap-up complete for <issue-id>.
-- N subtasks, M commits
+- N subtasks, M commits, +A / -D lines (band <X> vs planned <Y>; reduction pass removed R)
 - PR: <url or "not opened">   (hotfix flow: also the develop sync PR, or the warning that it's missing)
 - Team message ready at .dev-assistant/issues/<issue-id>/execution/team-message.txt (and shown above for copy)
 - Wrap-up report at .dev-assistant/issues/<issue-id>/execution/wrap-up-report.md
