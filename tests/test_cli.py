@@ -81,6 +81,7 @@ def test_issue_create_produces_phase_folders_and_metadata(
     assert "id: FOO-1" in issue_md
     assert "title: First issue" in issue_md
     assert "experimental: false" in issue_md
+    assert "autonomy: balanced" in issue_md
     assert "Reproduce the bug." in issue_md
 
 
@@ -103,6 +104,95 @@ def test_experimental_flag_recorded(runner: CliRunner, chdir_tmp: Path) -> None:
         chdir_tmp / WORKSPACE_DIRNAME / "issues" / "EXP-1" / "issue.md"
     ).read_text()
     assert "experimental: true" in issue_md
+
+
+def test_autonomy_level_recorded_at_create(runner: CliRunner, chdir_tmp: Path) -> None:
+    runner.invoke(app, ["init"])
+    result = runner.invoke(
+        app,
+        ["issue", "create", "--id", "AUT-1", "--title", "Hands off", "--autonomy", "auto"],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    issue_md = (
+        chdir_tmp / WORKSPACE_DIRNAME / "issues" / "AUT-1" / "issue.md"
+    ).read_text()
+    assert "autonomy: auto" in issue_md
+
+
+def test_autonomy_rejects_unknown_level(runner: CliRunner, chdir_tmp: Path) -> None:
+    runner.invoke(app, ["init"])
+    result = runner.invoke(
+        app,
+        ["issue", "create", "--id", "AUT-2", "--title", "x", "--autonomy", "yolo"],
+    )
+    assert result.exit_code != 0
+    assert not (chdir_tmp / WORKSPACE_DIRNAME / "issues" / "AUT-2").exists()
+
+
+def test_set_flag_updates_autonomy_in_place(runner: CliRunner, chdir_tmp: Path) -> None:
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["issue", "create", "--id", "AUT-3", "--title", "x"])
+    result = runner.invoke(
+        app, ["issue", "set-flag", "--id", "AUT-3", "--autonomy", "guided"]
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    issue_md = (
+        chdir_tmp / WORKSPACE_DIRNAME / "issues" / "AUT-3" / "issue.md"
+    ).read_text()
+    assert "autonomy: guided" in issue_md
+    assert "autonomy: balanced" not in issue_md
+    # The field is set once, not appended on every call.
+    assert issue_md.count("autonomy:") == 1
+
+
+def test_set_flag_inserts_autonomy_when_field_absent(
+    runner: CliRunner, chdir_tmp: Path
+) -> None:
+    """Issues created before the field existed still accept a level."""
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["issue", "create", "--id", "OLD-1", "--title", "x"])
+    issue_md_path = chdir_tmp / WORKSPACE_DIRNAME / "issues" / "OLD-1" / "issue.md"
+    issue_md_path.write_text(
+        issue_md_path.read_text().replace("autonomy: balanced\n", "")
+    )
+
+    result = runner.invoke(
+        app, ["issue", "set-flag", "--id", "OLD-1", "--autonomy", "auto"]
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "autonomy: auto" in issue_md_path.read_text()
+
+
+def test_set_flag_requires_a_flag(runner: CliRunner, chdir_tmp: Path) -> None:
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["issue", "create", "--id", "AUT-4", "--title", "x"])
+    result = runner.invoke(app, ["issue", "set-flag", "--id", "AUT-4"])
+    assert result.exit_code == 1
+
+
+def test_issue_show_reports_autonomy_level(runner: CliRunner, chdir_tmp: Path) -> None:
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["issue", "create", "--id", "AUT-5", "--title", "x"])
+    result = runner.invoke(app, ["issue", "show", "--id", "AUT-5"])
+    assert result.exit_code == 0
+    assert "## Autonomy" in result.stdout
+    assert "**balanced**" in result.stdout
+
+
+def test_issue_show_defaults_pre_field_issues_to_guided(
+    runner: CliRunner, chdir_tmp: Path
+) -> None:
+    runner.invoke(app, ["init"])
+    runner.invoke(app, ["issue", "create", "--id", "OLD-2", "--title", "x"])
+    issue_md_path = chdir_tmp / WORKSPACE_DIRNAME / "issues" / "OLD-2" / "issue.md"
+    issue_md_path.write_text(
+        issue_md_path.read_text().replace("autonomy: balanced\n", "")
+    )
+
+    result = runner.invoke(app, ["issue", "show", "--id", "OLD-2"])
+    assert result.exit_code == 0
+    assert "**guided**" in result.stdout
+    assert "pre-0.6 issue" in result.stdout
 
 
 def test_review_create_without_init_fails(runner: CliRunner, chdir_tmp: Path) -> None:

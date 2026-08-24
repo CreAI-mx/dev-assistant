@@ -16,7 +16,9 @@ This phase handles **one round** of PR review iteration. Each invocation = one r
 - **`<issue-id>` alone** — the round targets the issue's main PR (`pr_url` in `plan.md` frontmatter). This is the only form valid in `single-branch` mode.
 - **`<issue-id> <N>`** — only valid when `plan.md` has `branching_mode: sub-branches`: the round targets subtask `N`'s sub-PR (`sub_pr_url` in the subtask's frontmatter) on its `sub_branch`. If the plan is `single-branch`, stop with *"This issue uses single-branch mode — there are no sub-PRs. Run `/dev-feedback <issue-id>`."*
 
-In `sub-branches` mode with no subtask argument: if the parent `pr_url` is not yet set but open sub-PRs exist, list them and ask which one to run the round against, rather than failing on the missing parent PR.
+In `sub-branches` mode with no subtask argument: if the parent `pr_url` is not yet set but open sub-PRs exist, list them and ask which one to run the round against, rather than failing on the missing parent PR. (This is an escalation — an ambiguous target — so it asks at every autonomy level.)
+
+A trailing `--guided` / `--balanced` / `--auto` token overrides the issue's autonomy level for this invocation only; strip it before parsing the issue ID and subtask number.
 
 ## Current state of the issue
 
@@ -69,7 +71,7 @@ The above is the target repo's own guideline documents. Apply when triaging and 
 
 ## Confirmation principle (non-negotiable)
 
-**Anything that touches the outside world requires explicit user confirmation, regardless of auto / auto-accept-edits modes.** For this phase that includes:
+**Nothing touches the outside world without explicit user confirmation.** This holds at every autonomy level and under Claude Code's auto-accept-edits mode. For this phase that includes:
 
 - `git push` (any branch, any time)
 - Posting replies to GitHub PR comments
@@ -78,9 +80,23 @@ The above is the target repo's own guideline documents. Apply when triaging and 
 
 Local operations (file edits, drafting impl-plans / replies, `git commit`) do not require confirmation — they are reversible and contained.
 
-**Reply-batch rule (critical, from user feedback):** All drafted replies must be presented as **one single batch** for user review **before any reply is posted to GitHub**. Replies are drafted in sub-phase 3 and held locally until the batch-review checkpoint in sub-phase 5. Do not post reply-by-reply as code fixes are applied.
+**Reply-batch rule (critical, from user feedback):** All drafted replies must be presented as **one single batch** for user review **before any reply is posted to GitHub**. Replies are drafted in sub-phase 3 and held locally until the batch-review checkpoint in sub-phase 5. Do not post reply-by-reply as code fixes are applied. **This rule holds at every autonomy level — `auto` included.** It is the reason the sub-phase 5 batch is never skippable.
 
-If the user is in auto mode and an external op is about to fire, **still pause and ask explicitly**.
+## Autonomy level — how many checkpoints this round fires
+
+The `## Autonomy` block in the `dev-assistant issue show` output above resolves this issue's level (`guided` | `balanced` | `auto`). Issues created before the field existed resolve to `guided`.
+
+| Kind of stop | `guided` | `balanced` | `auto` |
+|---|---|---|---|
+| **Approval** — triage (2.3), per-cluster impl plans (4.1) | both, per cluster | **one checkpoint, at 3.5** — triage + every impl plan + every drafted reply in one view | none — but every classification and skip is recorded in the round report |
+| **External** — push, post replies, resolve threads, edit PR body | one confirmation per operation | **one batch, at 5.1** — the reply batch *is* the external batch | same one batch |
+| **Escalation** — a post that fails, a remote-state ✗, an ambiguous PR target | stops | stops | stops |
+
+So a round costs about nine stops at `guided`, **two** at `balanced`, and **one** at `auto` — and that one is the reply batch, which no level removes.
+
+**Never removed at any level in this phase:** the sub-phase 5 reply batch. Replies go out under the user's name, to their colleagues, on their PR. They are reviewed as a complete set before a single one posts.
+
+At `balanced` / `auto`, add `autonomy: <level>` to the round report's frontmatter and a **`## Decided without review`** section listing the classifications, cluster skips, and reply wordings the user did not vet.
 
 ## How to interact with the user
 
@@ -240,7 +256,9 @@ status: pending-user-review
 
 ### 2.3 — User review checkpoint
 
-Display the triage view to the user (the summary table + the cluster table, NOT the full per-comment list — link to the file for that). Ask:
+**At `balanced` / `auto`: skip this checkpoint.** Set `status: approved` in `triage.md` with `approved_by: autonomy-<level>` and go to sub-phase 3 — at `balanced` the triage is shown for approval at 3.5, together with the plans and replies it produced, which is a better view of the same decision. Deferring a cluster to manual discussion is a call only the user makes: at these levels, classify it and let them defer it at the checkpoint (or, at `auto`, in the round report).
+
+**At `guided`:** display the triage view to the user (the summary table + the cluster table, NOT the full per-comment list — link to the file for that). Ask:
 
 ```
 Triage saved at feedback/round-NN/triage.md.
@@ -254,7 +272,7 @@ Review the classification. Options:
   (d) Abandon round
 ```
 
-Wait for the user's decision. **Pause and wait even under auto mode.**
+Wait for the user's decision. **Pause and wait — Claude Code's auto-accept mode does not answer this.**
 
 - **Approve** → set `status: approved` in triage.md frontmatter, proceed.
 - **Reclassify / defer** → apply the user's edits (rewrite triage.md), then re-show the cluster table and ask again.
@@ -366,7 +384,37 @@ Files at feedback/round-NN/clusters/*/
 Proceeding to apply.
 ```
 
-No user confirmation here — proceed to sub-phase 4. (The user gets to see all replies as a batch in sub-phase 5; per-cluster impl-plan approval happens inside sub-phase 4.)
+At `guided` and `auto`, no user confirmation here — proceed to sub-phase 4. (The user gets to see all replies as a batch in sub-phase 5; at `guided`, per-cluster impl-plan approval also happens inside sub-phase 4.)
+
+### 3.5 — Round-plan checkpoint (`balanced` only)
+
+This is the round's single approval, placed here because everything that will happen is now drafted and nothing has been applied yet. One view:
+
+```
+================================================================
+ROUND NN PLAN — <n> comments → <k> clusters
+================================================================
+
+TRIAGE
+  01 oauth-redirect-bug   blocking-correctness · bug     → code-fix (1 commit, 1 reply)
+  02 redirect-tests       blocking-design · tests        → code-fix (1 commit, 2 replies)
+  03 style-nits-auth      nit · style                    → code-fix (1 commit, 3 replies)
+  04 jose-question        question                       → reply-only (1 reply)
+
+PLANS (code-fix clusters)
+  01 → auth.py — store state on session before redirect; fix(auth): …
+  02 → tests/test_auth.py — add expired-token case; test(auth): …
+  03 → auth.py, parser.py — naming pass; style(auth): …
+
+DRAFTED REPLIES  (final wording; commit SHAs filled in after the fixes land)
+  <the same per-thread view as 5.1, reviewer quote + drafted reply>
+
+================================================================
+Approve / reclassify a cluster / defer a cluster to manual discussion /
+skip a cluster / edit a reply / abandon round
+```
+
+Wait for the decision. On any change, apply it and re-show the whole view. On approve, every cluster is approved — sub-phase 4 applies them without further per-cluster prompts, and sub-phase 5 still shows the reply batch with real SHAs before anything posts.
 
 ---
 
@@ -375,6 +423,12 @@ No user confirmation here — proceed to sub-phase 4. (The user gets to see all 
 For each `code-fix` cluster, in severity order:
 
 ### 4.1 — Show impl-plan summary, ask approval
+
+**At `guided`:** per-cluster approval as described here.
+
+**At `balanced`:** the plans were approved as a set at 3.5 — print the one-line summary per cluster and apply, no prompt.
+
+**At `auto`:** print the one-line summary per cluster and apply. A cluster is skipped only when its fix would contradict the plan or the repo context — record any such skip, with its reason, in the round report's `## Decided without review`.
 
 ```
 Cluster 01 (oauth-redirect-bug, blocking-correctness · bug):
@@ -392,7 +446,7 @@ Approve / refine / skip?
 - **Refine** → take comments, re-draft `impl-plan.md`, re-show
 - **Skip** → mark cluster `status: skipped` in `meta.md`, continue to next cluster (its reply is also skipped in 5)
 
-**Nits-batching shortcut:** if the next-up cluster is severity `nit`, and there are multiple consecutive nit clusters, offer a single "approve all remaining nit clusters" prompt instead of per-cluster confirmation. The user can still say no and approve individually.
+**Nits-batching shortcut (`guided`):** if the next-up cluster is severity `nit`, and there are multiple consecutive nit clusters, offer a single "approve all remaining nit clusters" prompt instead of per-cluster confirmation. The user can still say no and approve individually.
 
 ### 4.2 — Subagent writes the fix
 
@@ -496,7 +550,24 @@ Options:
   (d) Abandon posting — don't post any replies (commits stay; you can re-run later)
 ```
 
-**Wait for the user's decision. Pause even under auto mode.**
+**At `balanced` / `auto`, this view carries the rest of the round's external operations** — the reply batch *is* the external batch. Append to it:
+
+```
+Also about to fire, in order:
+  PUSH             <branch> → origin (force-with-lease, <n> new commits)
+  POST             <k> replies across <j> threads
+  RESOLVE          <t> threads (code-fix clusters only; questions/discussions stay open)
+  UPDATE PR BODY   commit map += <n> rows
+
+Options:
+  (a) Approve — push, post, resolve, update the commit map
+  (b) Edit a specific reply
+  (c) Skip specific replies (commits stay; those threads get no reply)
+  (d) Drop one of the four operations (e.g. "don't resolve anything")
+  (e) Abandon posting — nothing goes out; commits stay local
+```
+
+**Wait for the user's decision at every autonomy level. Claude Code's auto-accept mode does not answer this, and neither does `--auto`.** Fire the approved ops in listed order; if one fails, stop there (that is 5.3's `partial_post` path) rather than continuing.
 
 - **Approve** → proceed to 5.2.
 - **Edit** → re-open the specified `reply.md`, let user edit, re-assemble, re-show.
@@ -505,7 +576,7 @@ Options:
 
 ### 5.2 — Push (CONFIRM)
 
-Before posting any reply, the commits must be on origin so the reviewers see them.
+Before posting any reply, the commits must be on origin so the reviewers see them. At `balanced` / `auto` this was approved as part of the 5.1 batch — push without re-asking. At `guided`:
 
 - Ask: *"About to push `<branch>` to origin (force-with-lease). Proceed?"*
 - On confirm: `git push --force-with-lease origin <branch>`.
@@ -529,7 +600,9 @@ After successful posting, print a terse confirmation per reply: *"posted reply t
 
 For each cluster where action is `code-fix` and the commit landed, the included review threads can be marked resolved on GitHub. Resolution uses the GraphQL mutation `resolveReviewThread`.
 
-Ask the user:
+**At `balanced` / `auto`:** resolution was covered by the 5.1 batch — resolve every candidate thread (code-fix clusters with a landed commit) unless the user dropped that operation, and report the count. Question / discussion clusters are never auto-resolved at any level.
+
+**At `guided`,** ask the user:
 
 ```
 K threads are candidates for resolution (across N clusters with applied fixes).
@@ -555,7 +628,7 @@ The PR body carries a `## Commit map` table (written at execute wrap-up) mapping
 | <short-sha> | review round <NN> — <cluster slug> | — | <commit subject> |
 ```
 
-**Display the rows to append. Ask: "Update the PR body's commit map with this round's <n> commits? Proceed?"** On confirm: `gh pr edit <pr_url> --body "<updated body>"`. On decline: skip (note it in the round report). If the PR body has no commit map (pre-0.6 PRs), offer to add the full table instead.
+**At `guided`: display the rows to append and ask — "Update the PR body's commit map with this round's <n> commits? Proceed?"** At `balanced` / `auto` this was in the 5.1 batch; apply it without re-asking. On confirm: `gh pr edit <pr_url> --body "<updated body>"`. On decline: skip (note it in the round report). If the PR body has no commit map (pre-0.6 PRs), offer to add the full table instead.
 
 Separately: if any cluster commit changed material the original PR body *prose* summarized (rare), offer to regenerate those sections in the same edit. Default: skip unless the user opts in.
 
@@ -579,6 +652,7 @@ Write `feedback/round-NN/report.md`:
 issue: <issue-id>
 round: <NN>
 status: complete | abandoned | partial
+autonomy: <guided | balanced | auto>
 pr_url: <url>
 pulled_at: <timestamp from sub-phase 1>
 posted_at: <timestamp of successful reply posting, or null>
@@ -617,6 +691,10 @@ What GitHub actually shows after this round: replies confirmed present, branch s
 
 ## Deferred for discussion
 - Cluster X — reason
+
+## Decided without review
+
+(`balanced` / `auto` only — omit the section at `guided`.) Classifications the user never vetted (severity, type, cluster grouping), clusters skipped and why, reply wordings sent as drafted, and — at `auto` — the fact that no impl plan in this round was reviewed before it was applied.
 
 ## Notes for /dev-evaluate
 What was hard, what reviewers cared about, what we got wrong the first time.

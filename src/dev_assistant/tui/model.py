@@ -88,6 +88,16 @@ def _as_bool(value: str | None) -> bool:
     return (value or "").strip().lower() == "true"
 
 
+def _autonomy(value: str | None) -> str:
+    """Resolve the issue's autonomy level from frontmatter.
+
+    Mirrors the CLI: an absent or unrecognized value reads as ``guided`` — the
+    behavior issues created before the field existed were planned under.
+    """
+    level = (_clean(value) or "").lower()
+    return level if level in ("guided", "balanced", "auto") else "guided"
+
+
 def _clean(value: str | None) -> str | None:
     if value is None:
         return None
@@ -274,6 +284,7 @@ class Issue:
     created: datetime | None
     status: str
     experimental: bool
+    autonomy: str
     description: str
     archived: bool
     phases: list[PhaseStatus]
@@ -546,6 +557,7 @@ def _load_issue(issue_dir: Path, *, archived: bool) -> Issue:
         created=_parse_dt(meta.get("created")),
         status=_clean(meta.get("status")) or ("archived" if archived else "active"),
         experimental=_as_bool(meta.get("experimental")),
+        autonomy=_autonomy(meta.get("autonomy")),
         description=body,
         archived=archived,
         phases=_scan_phases(issue_dir),

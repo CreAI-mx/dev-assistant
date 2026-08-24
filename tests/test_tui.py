@@ -71,7 +71,8 @@ def workspace(tmp_path: Path) -> Path:
     _write(
         i2 / "issue.md",
         "---\nid: VN-2\ntitle: Second\n"
-        "created: 2026-06-20T10:00:00+00:00\nstatus: active\nexperimental: true\n---\n\nDesc\n",
+        "created: 2026-06-20T10:00:00+00:00\nstatus: active\nexperimental: true\n"
+        "autonomy: auto\n---\n\nDesc\n",
     )
     _write(i2 / "gathering" / "objectives.md", "# o\n")
     for ph in ("refinement", "plan", "execution", "feedback", "evaluation"):
@@ -316,6 +317,25 @@ def test_review_scan(workspace):
     assert rv.last_verdict == "APPROVE"
     # 2 comments in round-01 (summary excluded) + 1 in round-02.
     assert rv.total_comments == 3
+
+
+def test_autonomy_level_read_from_frontmatter(workspace):
+    ws = model.load_workspace(workspace)
+    issues = {i.id: i for i in ws.active_issues}
+    assert issues["VN-2"].autonomy == "auto"
+
+
+def test_autonomy_defaults_to_guided_when_absent(workspace):
+    """VN-1's frontmatter predates the field — it must not read as balanced."""
+    ws = model.load_workspace(workspace)
+    issues = {i.id: i for i in ws.active_issues}
+    assert issues["VN-1"].autonomy == "guided"
+
+
+def test_autonomy_unknown_value_falls_back_to_guided():
+    assert model._autonomy("yolo") == "guided"
+    assert model._autonomy(None) == "guided"
+    assert model._autonomy("'balanced'") == "balanced"
 
 
 def test_quoted_title_unmangled(workspace):

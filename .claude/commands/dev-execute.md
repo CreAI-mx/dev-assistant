@@ -15,7 +15,9 @@ You are running the **execute** phase for issue `$ARGUMENTS`.
 - **`<issue-id> <N>`** — explicitly target subtask `N` (1-indexed). Useful for re-running.
 - **`<issue-id> wrap-up`** — force wrap-up mode (only valid if all subtasks are done).
 
-Parse `$ARGUMENTS` accordingly at the start. The issue ID is the first whitespace-separated token.
+Any of these may carry a trailing `--guided` / `--balanced` / `--auto` token, which overrides the issue's autonomy level for this invocation only.
+
+Parse `$ARGUMENTS` accordingly at the start. The issue ID is the first whitespace-separated token; strip the autonomy token before interpreting the rest.
 
 ## Current state of the issue
 
@@ -85,7 +87,7 @@ The above is the target repo's own guideline documents (workflows, naming, lifec
 
 ## Confirmation principle (non-negotiable)
 
-**Anything that touches the outside world requires explicit user confirmation, regardless of auto / auto-accept-edits modes.** This includes:
+**Nothing touches the outside world without explicit user confirmation.** This holds at every autonomy level and under Claude Code's auto-accept-edits mode. It covers:
 
 - `git push` (any branch, any time)
 - `gh pr create`, `gh pr edit`, `gh pr close`
@@ -96,7 +98,47 @@ The above is the target repo's own guideline documents (workflows, naming, lifec
 
 Local operations (file edits, `git commit`, `git rebase`, branch creation) do **not** require confirmation — they are reversible and contained.
 
-If the user is in auto mode and an external op is about to fire, **still pause and ask explicitly**. Phrase confirmations clearly: *"About to push `feat/VN-742-oauth-flow` to origin. Proceed? (y/n)"*
+What the autonomy level changes is **how many times you ask**, never **whether** you ask.
+
+## Autonomy level — how many checkpoints this phase fires
+
+The `## Autonomy` block in the `dev-assistant issue show` output above resolves this issue's level (`guided` | `balanced` | `auto`). Issues created before the field existed resolve to `guided`.
+
+| Kind of stop | `guided` | `balanced` | `auto` |
+|---|---|---|---|
+| **Approval** — the impl plan (2.3) | approve / refine / abandon | approve / refine / abandon | none — the plan is written, the mechanical checks still run, and the summary is reported as you start coding |
+| **External** — push, PR, GH issue, Jira | one confirmation per operation | **one batch per sub-phase** (see below) | one batch per sub-phase |
+| **Escalation** — commit hook failure, rebase conflict, criteria failing after auto-fix, unexpected files touched, sub-PR unmerged | stops | stops | stops |
+
+**Never removed at any level in this phase:** the external-operations batch, the passing-criteria verification in 3.5, and every escalation in sub-phase 3. Code that fails its own criteria never proceeds silently.
+
+### The external-operations batch (`balanced` / `auto`)
+
+Instead of asking per operation, collect every external op due at this point in the phase and ask **once**:
+
+```
+EXTERNAL OPERATIONS — <sub-phase>, issue <issue-id>
+
+1. CREATE GH ISSUE      title: "<title>"
+                        body:  <first 3 lines…>  (full text at <path>)
+2. CREATE JIRA SUBTASK  <parent>: "<summary>"  assignee: <you>
+3. PUSH                 <branch_name> → origin  (<n> commits)
+4. OPEN DRAFT PR        <branch_name> → <target_branch>
+                        title: "<title>"       body: <first 3 lines…>
+5. JIRA COMMENT         on <TICKET>: "Draft PR opened: …"
+
+Approve all / drop specific ops (say which numbers) / abandon
+```
+
+Rules for the batch:
+
+- **Show the real payload**, not a description of it. Titles and bodies in full or first-lines-plus-path; never "the usual PR body".
+- **Fire in listed order** after approval, reporting each result on one line. If one fails, **stop** — do not continue down the list. That is an escalation.
+- **Dropped ops** are recorded exactly as a declined per-op confirmation is today: state persists (`gh_issue_created: false`, `pr_url` unset) and the op is offered again at wrap-up.
+- **At most one batch per sub-phase.** Sub-phase 1 (1a + 1c together), sub-phase 3.8 (`sub-branches` only), and wrap-up each get their own — they are separated by real work, so a single batch for the whole invocation would ask for approval on things that do not exist yet.
+- **Merge is never part of a batch.** It does not happen in this phase at all (see `/dev-merge`).
+
+At `balanced` / `auto`, add `autonomy: <level>` to the frontmatter of `impl-plan.md`, `execution-notes.md`, and `wrap-up-report.md`, and a **`## Decided without review`** section to the wrap-up report.
 
 ## How to interact with the user
 
@@ -114,6 +156,8 @@ This sub-phase prepares everything needed before the work begins. It has two hal
 
 If experimental mode is active, **skip this sub-phase entirely**. Print "experimental mode — skipping external prep" and proceed to sub-phase 1b.
 
+**At `balanced` / `auto`, 1a asks nothing on its own.** Work out which items are due (using the checks below), draft their payloads, and hold them for the sub-phase 1 external batch — which fires at the end of 1c, together with the push and the draft PR. If 1c does not run (no new branch this invocation), fire the batch at the end of 1a instead. The rest of this sub-phase describes the `guided` per-item flow; the *content* of each item (what gets created, from which template, assigned to whom) is identical at every level.
+
 Otherwise, for the current subtask `N`:
 
 1. **Check issue-level state in `plan.md`:** has the GitHub issue been created? (`gh_issue_created` field)
@@ -130,7 +174,7 @@ Otherwise, for the current subtask `N`:
 
 3. **(Edge case)** If `jira_pushed: true` but `jira_description_populated: false`: the user created the subtask manually but the description is empty. Offer to populate it now. Same flow.
 
-After 1a, summarize what was done: "Created Jira subtask VN-742-3; GH issue already exists (#42); skipped one optional step."
+After 1a, summarize what was done: "Created Jira subtask VN-742-3; GH issue already exists (#42); skipped one optional step." At `balanced` / `auto`, this summary comes after the batch fires, not after 1a itself.
 
 ### Sub-phase 1b — Local branch preparation (automatic, no confirm)
 
@@ -176,6 +220,8 @@ Per the branching strategy, work starts by opening a **Draft PR** before writing
 
 In `sub-branches` mode this opens the **parent** feature branch's draft PR → `<target_branch>`. The empty commit is what gives it a base; sub-PRs still target the parent feature branch (sub-phase 3.8), not `<target_branch>`.
 
+**At `balanced` / `auto`:** do the local preparation for all three steps below — build the PR title and body, resolve the base, draft the Jira comment — then present them, together with whatever 1a held back, as the **sub-phase 1 external batch** (see the batch spec above) and fire the approved ops in order. The verification steps (checking `baseRefName` after creation, recording `pr_url`) still run per op. The rest of this sub-phase describes the `guided` per-op flow.
+
 1. **Push the feature branch (CONFIRM):** *"About to push `<branch_name>` to origin to open its draft PR. Proceed?"* — `git push -u origin <branch_name>`. (In `sub-branches` mode this is the parent branch; check out the parent first if currently on the sub-branch, then return to the sub-branch after.)
 2. **Open the draft PR (CONFIRM):** build title + body from `pr-template`, populated with the issue objectives from `gathering/objectives.md` + planned subtasks from `plan.md` (the work isn't done yet, so frame it as scope/plan, not results). Link the GH issue if `gh_issue_created`. Before creating, verify the base: the target in the create command must be exactly `plan.md`'s `target_branch`. **Display the proposed title + body. Ask: "Open this draft PR? Target: `<target_branch>`. Proceed?"** On confirm: `gh pr create --draft --base <target_branch> --head <branch_name> --title ... --body ...`. Then verify what was actually created — `gh pr view <url> --json baseRefName` matches `target_branch` (repo default-branch settings can silently redirect a base). Record `pr_url: <url>` and `pr_state: draft` in `plan.md` frontmatter.
 3. **Comment on the Jira parent (optional, CONFIRM):** only if Atlassian MCP is available and the parent ticket is known — short comment per `comment-style`, e.g. `"Draft PR opened: <url>. Targets <target_branch>. Work in progress."`
@@ -199,6 +245,7 @@ Draft `impl-plan.md` with these sections:
 issue: <issue-id>
 subtask: <N>
 status: pending
+autonomy: <guided | balanced | auto>
 iterations: 1
 ---
 
@@ -246,6 +293,10 @@ If after 2 re-drafts the mechanical checks still fail, surface to the user with 
 
 ### 2.3 — Show to user, get decision
 
+**At `guided` / `balanced`:** this is the phase's approval checkpoint — the one place a human sees what the code is about to become before it exists. It stays at `balanced`; a subtask's impl plan is exactly the kind of thing that is cheap to redirect now and expensive to redirect after four commits.
+
+**At `auto`:** no checkpoint. Write `impl-plan.md` with `status: approved` and `approved_by: autonomy-auto` in its frontmatter, print the same summary as a statement of what you are about to do, and go to sub-phase 3. The mechanical checks in 2.2 still gate the plan — and if they still fail after 2 re-drafts, that is an escalation: stop and ask, at every level.
+
 Display a **summary** of the impl plan (not the whole file):
 
 ```
@@ -261,7 +312,7 @@ Full plan at .dev-assistant/issues/<id>/execution/<NN-slug>/impl-plan.md
 Approve as-is / refine with comments / abandon?
 ```
 
-Wait for the user's decision.
+Wait for the user's decision (at `auto`, the last line is dropped and you proceed).
 
 - **Approve** → write the final state to `impl-plan.md` (`status: approved`), append to log, move to sub-phase 3.
 - **Refine** → take their comments, re-draft (this counts as another iteration, but the cap of 2 mechanical re-drafts doesn't apply to user-driven refines; allow up to 2 refines). Then re-show.
@@ -354,6 +405,7 @@ Write `.dev-assistant/issues/<issue-id>/execution/<NN-slug>/execution-notes.md`:
 issue: <issue-id>
 subtask: <N>
 status: complete
+autonomy: <guided | balanced | auto>
 commits: <count>
 commit_shas: [sha1, sha2, ...]
 verified_criteria: <passed>/<total>
@@ -383,7 +435,11 @@ Update `plan.md` subtask frontmatter: `status: done`.
 
 In `single-branch` mode, skip this step entirely. (Experimental mode never reaches here in sub-branches form — it forces single-branch behavior.)
 
-After verification passes, land this subtask as its own PR against the parent feature branch:
+After verification passes, land this subtask as its own PR against the parent feature branch.
+
+**At `balanced` / `auto`:** the rebase (step 1) is local — just do it, and treat conflicts as the hard stop they already are. Steps 2–5 become **one external batch** (parent push if needed, sub-branch push, sub-PR with its title + body, Jira subtask comment), approved once and fired in order.
+
+The `guided` per-op flow:
 
 1. **Rebase onto the parent tip:** `git fetch origin`, then `git rebase origin/<branch_name>` (or local `<branch_name>` if the parent isn't on origin yet). If this subtask was `stacked_on` a prior sub-branch whose PR has since merged, this rebase is what untangles it. Conflicts → **hard stop**, same protocol as wrap-up rebase: list conflicting files, user resolves, re-invoke.
 2. **Push the parent first if needed:** if `origin/<branch_name>` doesn't exist, the sub-PR has no base. **Ask: "About to push parent branch `<branch_name>` to origin (needed as sub-PR base). Proceed?"** On confirm: `git push -u origin <branch_name>`.
@@ -435,9 +491,9 @@ Otherwise: scan all subtasks for incomplete external prep.
 - For any subtask with `jira_pushed: false`, list it: "Subtask 2 (`Wire OAuth callback`) — Jira not pushed."
 - For issue-level `gh_issue_created: false`, list it.
 
-If anything is incomplete, ask: *"Handle deferred external prep now before PR opens? Options: yes (one prompt per item), no (proceed without)."*
+**At `guided`:** if anything is incomplete, ask *"Handle deferred external prep now before PR opens? Options: yes (one prompt per item), no (proceed without)."* If yes, walk each item with the same flow as sub-phase 1a; if no, proceed with whatever state is recorded.
 
-If user says yes, walk each item with the same flow as sub-phase 1a. If user says no, proceed with whatever state is recorded.
+**At `balanced` / `auto`:** don't ask separately. Draft the payloads for the incomplete items and put them at the top of the **wrap-up external batch** (4.4–4.6 below), where the user can drop any of them by number. Items dropped there stay recorded as incomplete in the wrap-up report.
 
 ### 4.3 — Rebase (skipped in experimental mode)
 
@@ -449,6 +505,27 @@ Otherwise:
 - `git rebase origin/<target_branch>`
 - If the rebase has conflicts → **hard stop**. List conflicting files. Tell the user: *"Rebase has conflicts. Resolve them manually (`git rebase --continue` after fixing), then re-invoke `/dev-execute <issue-id> wrap-up`."*
 - If clean → report "Rebased onto `<target_branch>` (no conflicts)."
+
+### 4.4–4.6 at `balanced` / `auto` — one wrap-up batch
+
+Sub-phases 4.4 (push), 4.5 (PR body + ready), 4.5b (hotfix sync PR), and 4.6 (Jira comment) — plus any deferred prep from 4.2 — are **one external batch**, approved once and fired in listed order:
+
+```
+EXTERNAL OPERATIONS — wrap-up, issue <issue-id>
+
+1. CREATE JIRA SUBTASK   (deferred from subtask 2) "<summary>"
+2. PUSH                  <branch> → origin  (force-with-lease, post-rebase, <n> commits)
+3. UPDATE PR BODY        <pr_url>            body: <first 3 lines…>  (commit map: <n> rows)
+4. MARK PR READY         <pr_url> → <target_branch>
+5. OPEN SYNC PR          <branch> → develop  (hotfix flow only)
+6. JIRA COMMENT          on <TICKET>: "PR ready for review: <url>…"
+
+Approve all / drop specific ops / abandon
+```
+
+The rebase (4.3) happens **before** the batch — it is local, and its conflicts are a hard stop at every level. Anything dropped from the batch behaves exactly as declining its per-op confirmation does below (the PR stays draft, the sync PR is recorded as `null` with the drift warning, and so on). If an op fails mid-batch, stop there and report — do not continue down the list.
+
+The rest of 4.4–4.6 describes the `guided` per-op flow.
 
 ### 4.4 — Push (skipped in experimental mode; otherwise CONFIRM)
 
@@ -541,6 +618,7 @@ Write `.dev-assistant/issues/<issue-id>/execution/wrap-up-report.md`:
 issue: <issue-id>
 phase: execution
 status: complete
+autonomy: <guided | balanced | auto>
 pr_url: <url or null>
 target_branch: <develop or "experimental">
 total_subtasks: <n>
@@ -577,6 +655,10 @@ Differences between what `plan.md` proposed and what actually got committed.
 ## Notes for /dev-evaluate
 
 What worked, what didn't, anything worth retrospecting.
+
+## Decided without review
+
+(`balanced` / `auto` only — omit the section at `guided`.) What you settled without a checkpoint: at `auto`, every impl plan that went straight to code (with its drift from the subtask spec); at both levels, any external op the batch dropped and what that leaves undone, and any judgment call made while writing code that the plan did not anticipate.
 ```
 
 ### 4.9 — Final report

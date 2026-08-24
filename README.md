@@ -40,6 +40,8 @@ Then in Claude Code, walk the phases:
 /dev-evaluate PROJ-123   # retro + lessons + close out externally
 ```
 
+**How much the phases ask you** is set at `issue create` time with `--autonomy`: `guided` fires every checkpoint (~75 stops across a full issue), `balanced` (the default) collapses each phase's approvals into one checkpoint and its external operations into one batched confirmation (~20), and `auto` drops the approval checkpoints and records the decisions in the phase reports (~12). Questions only you can answer, external writes, and escalations are asked at every level — see [Autonomy](docs/user-guide.md#autonomy-how-much-the-phases-ask-you) and the full [interaction map](docs/interaction-map.md).
+
 For experimental / sandbox work, add `--experimental` at `issue create` time to skip all external operations (no Jira, no GitHub, no PR) — this is also the recommended way to [try the workflow for the first time](docs/user-guide.md#4-try-it-first-with-experimental-mode-no-remote-changes).
 
 Full walkthrough of every phase — what you're asked, what lands on disk — in the [User guide](docs/user-guide.md#5-the-lifecycle-end-to-end).

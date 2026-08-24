@@ -229,6 +229,11 @@ def render_issue(
 
     badges = Text()
     badges.append(issue.status, style="green" if issue.status == "active" else "dim")
+    badges.append("  ·  ", style="dim")
+    badges.append(
+        f"autonomy {issue.autonomy}",
+        style="dim" if issue.autonomy == "guided" else "yellow",
+    )
     if issue.experimental:
         badges.append("  ·  ", style="dim")
         badges.append("experimental", style="yellow")

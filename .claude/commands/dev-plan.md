@@ -54,7 +54,7 @@ Every issue is executed in one of two branching modes. The choice is made in sub
 - **`single-branch`** (default) — one `feat/<TICKET>-<slug>` branch (off `develop`) for the whole issue. Subtasks land as commits on it. A draft PR → `develop` opens at execute start (sub-phase 1c) and is marked Ready at wrap-up. The per-PR commit backstop (≤10) applies to the issue total.
 - **`sub-branches`** — each subtask gets its own `feat/<TICKET>-<slug>-sub-N` branch off the parent feature branch, with its own sub-PR (target: the parent feature branch) opened at subtask completion. The parent's draft PR → `develop` still opens at execute start and is marked Ready at wrap-up once all sub-PRs are merged. The per-PR backstop applies per sub-PR (trivially satisfied at ≤3 commits each); the issue-level commit total may exceed 10.
 
-Recommend `sub-branches` when the total commit estimate pushes past the 8–10 band, when subtasks are independent enough to review in isolation, or when the user wants work landing incrementally instead of one big PR at the end. Otherwise default to `single-branch`. The user always decides.
+Recommend `sub-branches` when the total commit estimate pushes past the 8–10 band, when subtasks are independent enough to review in isolation, or when the user wants work landing incrementally instead of one big PR at the end. Otherwise default to `single-branch`. At `guided` the user decides; at `balanced` / `auto` you decide by these criteria and the user sees the call (with its rationale) in the sub-stage 5 checkpoint.
 
 ## What this phase produces
 
@@ -74,11 +74,28 @@ Two files, two purposes. Don't merge them.
 
 Plan is read-only on the world, write-only on `.dev-assistant/issues/$ARGUMENTS/plan/`. All side effects are deferred to `/dev-execute`.
 
+## Autonomy level — how many checkpoints this phase fires
+
+The `## Autonomy` block in the `dev-assistant issue show` output above resolves this issue's level (`guided` | `balanced` | `auto`). Issues created before the field existed resolve to `guided`. A trailing `--guided` / `--balanced` / `--auto` token in `$ARGUMENTS` overrides it for this invocation only — strip it before treating the rest as the issue ID.
+
+This is the phase where the levels differ most: at `guided` every one of the five sub-stages pauses, plus one pause per subtask, plus four viability questions — around seventeen stops for a four-subtask issue.
+
+| Kind of stop | `guided` | `balanced` | `auto` |
+|---|---|---|---|
+| **Content** — only the user knows it | the four viability questions, asked one at a time | folded into the single checkpoint as **your** answers, for the user to correct | same, and recorded as unreviewed |
+| **Approval** — approving a draft you produced | sub-stages 1, 2, 3 (×N subtasks), 4, 5, plus the post-write revision pass | **one checkpoint, in sub-stage 5** | none — write the plan and report what you decided |
+| **External** | none in this phase | none | none |
+| **Escalation** — a mechanical check that cannot be satisfied, an objective nothing covers, a subtask you cannot size | stops | stops | stops |
+
+**Never removed at any level in this phase:** the mechanical checks in sub-stage 5. They are not approvals — they are correctness. A plan that fails them does not get written at any level; it loops back to the sub-stage that has to change.
+
+At `balanced` / `auto`, the plan is drafted end to end before the user sees anything. That means **you** answer the questions `guided` would have asked — and you answer them honestly, including "this subtask is hiding a fourth commit" and "I would not be surprised if this took twice as long". Write `autonomy: <level>` into both files' frontmatter and a **`## Decided without review`** section into `report.md`.
+
 ## How to interact with the user
 
-This phase requires real conversation. **Every sub-stage has a user pause — when one of them is reached, stop and wait for the user's actual response.** Do not synthesize answers on the user's behalf, even when running in autonomous / auto-accept modes.
+**When a stop is reached, stop and wait for the user's actual response.** Do not synthesize answers on the user's behalf, and never under Claude Code's auto-accept mode either.
 
-Backtracking is allowed at any time. If the user says "go back to sub-stage 2", do so — earlier decisions are not locked in until the write step in sub-stage 5.
+Backtracking is allowed at any time. If the user says "go back to sub-stage 2", do so — earlier decisions are not locked in until the write step in sub-stage 5. At `balanced` / `auto`, "go back" means redrafting that part of the plan and re-showing the whole checkpoint view.
 
 ## How to run this phase — five sub-stages
 
@@ -99,9 +116,9 @@ Summarize for the user:
 - Any constraints or open questions carried over from gather
 - Which strategies were resolved (note whether each came from per-repo override or source default — visible in the HTML comment at the top of each strategy)
 
-Then confirm: *"Is this the right context to plan from?"*
+**At `guided`:** confirm — *"Is this the right context to plan from?"* — and pause. If they want to go back to gather, stop here.
 
-**Pause for user confirmation.** If they want to go back to gather, stop here.
+**At `balanced` / `auto`:** print the same summary and keep going. It is orientation, not a decision; if the context is wrong the user will say so when they see the plan. The one exception is an escalation: if `objectives.md` has objectives too vague to plan against, stop and say so at any level — planning against mush produces mush.
 
 ### Sub-stage 2 — Decomposition proposal
 
@@ -119,11 +136,16 @@ Constraints to enforce:
 - **Each commit's type (set in sub-stage 3) must be one of the types listed in the loaded branching-strategy.** A `feat/` branch should carry predominantly `feat | refactor | test | chore | docs` types; `fix` only when the issue is bug-driven.
 - **Estimated commit total across all subtasks should aim for 4–8, hard backstop at 10.** If the early estimate is above 10, you're either oversizing subtasks (split the issue) or over-committing within them (merge logically related commits).
 
-**Pause for user input.** Iterate with the user — "merge 1 and 2", "subtask 4 only needs 1 commit not 3", "you're missing coverage of O3" — until the shape settles.
+**At `guided`: pause for user input.** Iterate with the user — "merge 1 and 2", "subtask 4 only needs 1 commit not 3", "you're missing coverage of O3" — until the shape settles.
+
+**At `balanced` / `auto`:** don't stop. Settle the shape yourself against the constraints above and carry the table into the sub-stage 5 checkpoint. Apply the same scrutiny the user would have: if you can merge two subtasks, merge them; if one is hiding a fourth commit, split it. Note any decomposition you seriously considered and rejected — it goes in `report.md`.
 
 ### Sub-stage 3 — Subtask elaboration
 
-For each subtask agreed in sub-stage 2, **in order**, fill in the full spec. Walk one subtask at a time. Show the user the elaborated spec, iterate, lock it in, move to the next.
+For each subtask agreed in sub-stage 2, **in order**, fill in the full spec.
+
+- At `guided`: walk one subtask at a time. Show the user the elaborated spec, iterate, lock it in, move to the next.
+- At `balanced` / `auto`: elaborate all of them without stopping. They are reviewed together in the sub-stage 5 checkpoint (at `auto`, reported rather than reviewed).
 
 For each subtask, produce:
 
@@ -131,7 +153,7 @@ For each subtask, produce:
 - **What's affected** — files / modules / external systems this subtask touches. **Keep to ≤4 bullets** (slightly more permissive than the per-commit rule since a subtask can span multiple commits). If you can't, the subtask is hiding a fourth commit — split into two subtasks.
 - **Passing criteria** — 3–5 checkbox items. Each one is something `/dev-execute` will be able to verify mechanically (a file exists, a test passes, a function returns X). Criteria are at the subtask level, not per-commit.
 - **Strategies that apply** — list by name (e.g. `[branching-strategy, output-style]`); never embed their content
-- **Commit count** — confirm with the user: "1, 2, or 3 commits for this subtask?" Default to the estimate from sub-stage 2; ask before changing. Hard cap at 3.
+- **Commit count** — at `guided`, confirm with the user: "1, 2, or 3 commits for this subtask?" At `balanced` / `auto`, set it yourself from what the work actually needs and state the reasoning in one clause (it shows up in the checkpoint table). Default to the estimate from sub-stage 2 either way. Hard cap at 3.
 - **Commit message previews** — one per commit. Each follows the loaded branching strategy's Conventional Commits format:
   - Type: from the strategy's allowed types (`feat | fix | refactor | chore | docs | test | perf | ci`), chosen per commit based on what that specific commit does
   - Scope: the primary module the commit touches
@@ -139,7 +161,9 @@ For each subtask, produce:
   - Body bullets: `- <keyword>: <very short summary>` form
   - Footer: `refs $ARGUMENTS` on every commit
 
-**Pause for user input, per subtask.** This is the longest and most important sub-stage — vague specs here become bad commits later. Push back on hand-wavy passing criteria ("works correctly" → what does that mean?). Push back on commit message previews that don't tell you what the commit actually does.
+**At `guided`: pause for user input, per subtask.**
+
+This is the longest and most important sub-stage at every level — vague specs here become bad commits later. Push back on hand-wavy passing criteria ("works correctly" → what does that mean?). Push back on commit message previews that don't tell you what the commit actually does. At `balanced` / `auto` there is nobody else to push back, so do it to your own draft before it reaches the checkpoint.
 
 ### Sub-stage 4 — Sequencing and branch info
 
@@ -152,9 +176,9 @@ Now propose the full picture:
 - **Target branch**: resolved from the loaded branching strategy — never assumed. In the default strategy that means `develop` for the feature flow and `uat` for the hotfix flow; if the per-repo strategy override names different long-lived branches, use those. State where the value came from (which strategy document, which section). Record as `target_branch` in frontmatter — `/dev-execute` reads it from there and verifies it exists on `origin` before branching.
 - **Coverage map**: a table showing which subtasks cover which objectives. Mechanical check — confirm every specific objective is covered.
 
-Present all six to the user.
+**At `guided`:** present all six to the user and **pause**. They may redirect on order ("3 must come before 2"), slug ("call it `oauth-flow`, not `add-oauth-flow`"), or coverage gaps.
 
-**Pause for user input.** They may redirect on order ("3 must come before 2"), slug ("call it `oauth-flow`, not `add-oauth-flow`"), or coverage gaps.
+**At `balanced` / `auto`:** decide all six and carry them into the sub-stage 5 checkpoint, each with its one-line rationale. Two of them deserve extra care when nobody is checking: **flow** (a hotfix mis-detected as a feature targets the wrong branch — when the ticket does not say "hotfix" explicitly, it is a feature) and **branching mode** (follow the stated criteria; do not pick `sub-branches` for a 5-commit issue). If the ticket's language leaves the flow genuinely ambiguous, that is an escalation — ask.
 
 ### Sub-stage 5 — Viability check and write
 
@@ -175,18 +199,39 @@ The final rigor pass + write.
 
 If any mechanical check fails, loop back to whichever sub-stage needs to change (2 for decomposition, 3 for spec, 4 for sequencing).
 
-**Conversational checks (ask the user, one at a time):**
+**Conversational checks — the viability rubric:**
 
 1. *"For each subtask: is the commit count honest? A 1-commit subtask hiding 2 deserves to be 2 commits; a 3-commit subtask hiding 4 deserves to be split into two subtasks."*
 2. *"External dependencies — any other tickets, people, APIs, feature flags we haven't called out?"*
 3. *"What's the riskiest subtask, and what's plan B if it doesn't pan out?"*
 4. *"Would you be surprised if this took two times as long as the plan suggests?"*
 
-If the user surfaces issues, loop back to the relevant earlier sub-stage.
+- At `guided`: ask them one at a time. If the user surfaces issues, loop back to the relevant earlier sub-stage.
+- At `balanced` / `auto`: **answer them yourself, in writing**, and put your answers in the checkpoint view and in `report.md`'s viability section. Question 2 is the one you cannot fully answer alone — say so explicitly rather than filling it with a guess, and if the answer would change the plan, ask. A rubric you rubber-stamp is worse than no rubric: if question 4's honest answer is "yes, I would not be surprised", say that and explain which subtask is the reason.
 
-**When viability passes**, show the user a preview of both files (don't write yet). Ask for final confirmation.
+**When viability passes:**
 
-On confirm, write **two files** in this order.
+**At `guided`:** show the user a preview of both files (don't write yet) and ask for final confirmation.
+
+**At `balanced`:** this is the phase's single checkpoint. One view, containing:
+
+```
+Plan for <issue-id> — <N> subtasks, <M> commits, <flow> flow, <branching_mode> → <target_branch>
+
+  Decomposition        | # | Title | Covers | Commits |   (the sub-stage 2 table, final)
+  Per-subtask specs    | objectives, files affected, passing criteria, commit previews
+  Sequencing           | dependency graph, branch slug, coverage map
+  Viability            | my answers to the four rubric questions, including what I could not answer
+  Decided without review | the calls I made that you did not see
+
+Approve and write / change the decomposition / change a subtask / change the sequencing / abandon
+```
+
+Wait for the answer. On a change request, redraft and re-show the whole view — the mechanical checks re-run on every redraft.
+
+**At `auto`:** no checkpoint. Write both files, then show the same view as a report of what was written, leading with the `## Decided without review` list and the rubric answers. `/dev-execute` opens with the subtask spec and pauses at its own impl plan — a bad subtask gets caught there.
+
+On confirm (or immediately, at `auto`), write **two files** in this order.
 
 **First**: `.dev-assistant/issues/$ARGUMENTS/plan/report.md`
 
@@ -195,6 +240,7 @@ On confirm, write **two files** in this order.
 issue: $ARGUMENTS
 phase: plan
 status: complete
+autonomy: <guided | balanced | auto>
 ---
 
 # Planning report — $ARGUMENTS
@@ -217,11 +263,15 @@ Approaches discussed and rejected, with why. Brief — one or two lines per alte
 
 ## Viability outcomes
 
-What the mechanical checks said. What the conversational rubric surfaced (risks the user flagged, surprises, plan-B thinking).
+What the mechanical checks said. What the conversational rubric surfaced — at `guided`, the risks the user flagged; at `balanced` / `auto`, your own answers to all four questions, including the ones you could not answer without them.
 
 ## Risks going into execute
 
-Things to keep an eye on during execution. Open uncertainties that may force replanning. Subtasks the user identified as riskiest.
+Things to keep an eye on during execution. Open uncertainties that may force replanning. The riskiest subtask and why.
+
+## Decided without review
+
+(`balanced` / `auto` only — omit the section at `guided`.) Every call the user did not see before the plan was written: the decomposition shape and what you rejected, each subtask's commit count and the reasoning, flow and branching-mode selection, the branch slug, the dependency order where it was a judgment call, and any rubric question you answered on the user's behalf.
 ~~~
 
 **Second**: `.dev-assistant/issues/$ARGUMENTS/plan/plan.md`
@@ -231,6 +281,7 @@ Things to keep an eye on during execution. Open uncertainties that may force rep
 issue: $ARGUMENTS
 phase: plan
 status: complete
+autonomy: <guided | balanced | auto>
 flow: <feature | hotfix>
 proposed_branch: <feat | hotfix>/$ARGUMENTS-<slug>
 branching_mode: <single-branch | sub-branches>
@@ -320,7 +371,7 @@ refs $ARGUMENTS
 
 After writing both files, give the user a one-paragraph summary of what was decided.
 
-Then run a **final revision pass**. Ask the user:
+Then, **at `guided` only**, run a final revision pass. (At `balanced` the sub-stage 5 checkpoint already showed the whole plan before it was written, and at `auto` the write is followed by a report of what was decided — a second prompt here would just reintroduce the checkpoint under another name. At both levels, say instead: *"Plan written. Re-run `/dev-plan $ARGUMENTS` any time to revise it."*) Ask the user:
 
 > *"Anything you want to revisit now that the plan is on paper? Common things to change at this point — too many subtasks, a redundant one to drop or merge, one that's hiding two and should be split, passing criteria that look too vague on a second read, a commit count that feels off (too low for the work, or too high and worth merging), or a dependency order that feels wrong."*
 

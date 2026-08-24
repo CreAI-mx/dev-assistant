@@ -56,7 +56,13 @@ The repo-context documents are review ammunition: the PR author was supposed to 
 - All artifacts are files under `.dev-assistant/reviews/pr-<n>/`.
 - No commits, no pushes, no Jira writes. The reviewer comments; the author fixes.
 
-**Selection rule (critical):** no finding reaches GitHub unless the user explicitly selected it in sub-phase 4 and approved the assembled batch in sub-phase 5. Pause for both checkpoints **even under auto / auto-accept modes.**
+**Selection rule (critical):** no finding reaches GitHub unless the user explicitly selected it in sub-phase 4 and approved the assembled batch in sub-phase 5. Pause for both checkpoints **at every autonomy level and under Claude Code's auto-accept mode.**
+
+## Autonomy level — not applicable here
+
+The `autonomy` setting is a property of an *issue* workspace (`.dev-assistant/issues/<id>/issue.md`) and this command works on a *review* workspace (`.dev-assistant/reviews/pr-<n>/`) — someone else's PR, not your ticket. Nothing in this command varies by level, and there is no override token.
+
+That is deliberate rather than an omission. This command has exactly three stops — the Q&A (2.3), the selection (4), and the batch (5.1) — and each one is the point of the command: your questions shape the deep review, your selection decides what exists on GitHub, and your approval is what puts your name on it. There is nothing here to collapse.
 
 ## How to interact with the user
 
@@ -147,7 +153,7 @@ Ask me anything about the PR. Three things you can do here:
 Say "done" when you're ready for the deep review.
 ```
 
-**Stop and wait. Pause even under auto mode.** During the discussion:
+**Stop and wait. Claude Code's auto-accept mode does not answer this.** During the discussion:
 
 - Answer from `context.md` / the checked-out code; read more when needed.
 - **User findings**: append to a `discussion-findings` list (kept in memory, written to `findings.md` in sub-phase 3) with `source: user`.
@@ -222,7 +228,7 @@ Which findings go into the review? Options:
   (f) Abandon round (nothing posts; artifacts stay)
 ```
 
-**Stop and wait. Pause even under auto mode.** Nothing the user doesn't select exists, ever, on GitHub. Mark selections in `findings.md` (`selected: true/false` per finding, flip `status: selected`).
+**Stop and wait. Claude Code's auto-accept mode does not answer this.** Nothing the user doesn't select exists, ever, on GitHub. Mark selections in `findings.md` (`selected: true/false` per finding, flip `status: selected`).
 
 Then draft, for each **selected** finding, a comment file at `comments/F<NN>-<slug>.md` — the text that will appear on the PR, written per the comment-style strategy (lead with the point, no filler, no salutations; include the concrete suggestion). Line-anchored findings become inline comments (`path` + `line` + `side: RIGHT`); the rest fold into the summary. Draft `comments/summary.md`: 2–4 sentences of overall assessment (objective coverage first), the non-anchored findings, a **proposed verdict** (`APPROVE` / `REQUEST_CHANGES` / `COMMENT` — request changes iff any blocking-* finding was selected), and the **attribution footer** from the comment-style strategy as the last line.
 
@@ -260,7 +266,7 @@ Options:
   (d) Abandon posting — nothing posts; artifacts stay for a later run
 ```
 
-**Stop and wait. Pause even under auto mode.** This is the single checkpoint before anything leaves the machine. (If pre-flight flagged this as the user's own PR, only COMMENT is offered.)
+**Stop and wait. Claude Code's auto-accept mode does not answer this.** This is the single checkpoint before anything leaves the machine. (If pre-flight flagged this as the user's own PR, only COMMENT is offered.)
 
 ### 5.2 — Submit as ONE GitHub review
 

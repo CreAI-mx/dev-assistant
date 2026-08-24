@@ -42,9 +42,31 @@ The ONLY external write this phase may perform is the Jira title/description upd
 
 If the issue is marked `experimental: true` in its frontmatter, skip the Jira update too — record the refined title/description locally only.
 
+## Autonomy level — how many checkpoints this phase fires
+
+The `## Autonomy` block in the `dev-assistant issue show` output above resolves this issue's level (`guided` | `balanced` | `auto`). Issues created before the field existed resolve to `guided`. A trailing `--guided` / `--balanced` / `--auto` token in `$ARGUMENTS` overrides the issue's level for this invocation only — strip it before treating the rest as the issue ID.
+
+The level moves only two of the four kinds of stop:
+
+| Kind of stop | `guided` | `balanced` | `auto` |
+|---|---|---|---|
+| **Content** — only the user knows it | asked one at a time | opening context asked as one block | same as balanced |
+| **Approval** — approving a draft you produced | every sub-stage | **one checkpoint, in sub-stage 5** | same one checkpoint (it is also the Jira gate) |
+| **External** — anything leaving the machine | confirmed per operation | one confirmation | one confirmation |
+| **Escalation** — conflict, failure, ambiguity | stops | stops | stops |
+
+**Never removed at any level in this phase:**
+
+- **The sub-stage 2 exploration conversation.** A ticket cannot be refined against silence. It runs identically at every level — one question at a time, back and forth, for as long as it takes.
+- **The Jira write.** The rewritten title/description is an external write; it fires only after the user approves the exact text.
+
+At `balanced` / `auto`, add `autonomy: <level>` to `report.md`'s frontmatter and a **`## Decided without review`** section listing what you settled alone (which alternative won and why, what the report chose to record). Fewer checkpoints only stay safe if the artifact says what the user did not see.
+
 ## How to interact with the user
 
-This phase is the most conversation-heavy of all. **Sub-stages 2, 3, and 4 are real back-and-forth — stop and wait for the user's actual responses.** Do not synthesize answers on the user's behalf, even when running in autonomous / auto-accept modes. Ask one question at a time, give the user space to answer, and let their answer inform the next question. Push back when something seems infeasible or under-thought — the user wants a thinking partner here, not a stenographer.
+This phase is the most conversation-heavy of all. **Sub-stage 2 is real back-and-forth — stop and wait for the user's actual responses at every autonomy level.** Do not synthesize answers on the user's behalf, and never under Claude Code's auto-accept mode either. Ask one question at a time, give the user space to answer, and let their answer inform the next question. Push back when something seems infeasible or under-thought — the user wants a thinking partner here, not a stenographer.
+
+At `guided`, sub-stages 3 and 4 are also back-and-forth. At `balanced` / `auto` they are drafted straight through and land in the single sub-stage 5 checkpoint.
 
 Announce which sub-stage you're entering before each one. Don't move on until the current sub-stage has a settled outcome.
 
@@ -57,15 +79,21 @@ Get the ticket as it exists today:
 - **Jira via the Atlassian MCP** (preferred): look up `$ARGUMENTS` (likely the Jira key). Pull title, description, status, comments, linked issues. Keep the actual content verbatim — the original ticket text goes into the report.
 - **Fallback** (no MCP access): ask the user to paste the ticket's title and description.
 
-Show the user what you got and confirm it's the right ticket.
+Show the user what you got.
+
+- At `guided`: confirm it's the right ticket before going further.
+- At `balanced` / `auto`: state what you loaded and move on. The user will correct you in sub-stage 2 if it's the wrong ticket — don't spend a turn on an acknowledgement.
 
 If the workspace doesn't exist yet, create it now:
 
 ```
-dev-assistant issue create --id $ARGUMENTS --title "<current Jira title>" --description "<current Jira description>"
+dev-assistant issue create --id $ARGUMENTS --title "<current Jira title>" --description "<current Jira description>" --autonomy <level>
 ```
 
-(Ask first whether this is experimental/sandbox work — if so, add `--experimental`.)
+Two things only the user knows, so ask them — but at `balanced` / `auto` ask them **together, in one message**, alongside the first exploration question:
+
+- Is this experimental/sandbox work? (→ `--experimental`, which skips every external operation for this issue's whole lifecycle)
+- Which autonomy level should this issue run at? (→ `--autonomy`; default `balanced`. If the invocation carried an override token, use it and don't ask.)
 
 ### Sub-stage 2 — Exploration conversation
 
@@ -87,7 +115,11 @@ Converge. Propose, based on the exploration:
 - **Alternatives set aside** — each with the actual reason it lost (not "out of scope" boilerplate).
 - **Open questions** that survive refinement — things gather/plan must resolve, listed honestly.
 
-Show this convergence summary and iterate until the user agrees with the direction. If the conversation revealed the ticket should be split or abandoned, say so — recommending "this should be two tickets" or "this isn't worth doing" is a valid outcome of this phase; record it and stop after writing the report.
+**At `guided`:** show this convergence summary and iterate until the user agrees with the direction.
+
+**At `balanced` / `auto`:** don't stop here. Commit to the direction the exploration pointed at, note the call in your working notes, and carry the convergence summary into the sub-stage 5 checkpoint where the user sees it alongside the rewritten ticket and the report. If the exploration left two directions genuinely tied, that is an escalation, not an approval — surface it and ask, at any level.
+
+If the conversation revealed the ticket should be split or abandoned, say so — recommending "this should be two tickets" or "this isn't worth doing" is a valid outcome of this phase; record it and stop after writing the report.
 
 ### Sub-stage 4 — Ticket rewrite proposal
 
@@ -96,9 +128,24 @@ Draft the improved ticket and show it **side-by-side with the original**:
 - **Title** — original vs. proposed. The proposed title should name the chosen direction, not the vague symptom.
 - **Description** — original vs. proposed. The proposed description must carry enough for `/dev-gather` and a teammate reading cold: the problem, the chosen approach (one paragraph), explicit non-goals, known constraints, and open questions. Write it for the team, in the ticket's language conventions — it lives in Jira, not in dev-assistant.
 
-Iterate until the user explicitly approves the exact final text. Do not touch Jira yet.
+**At `guided`:** iterate until the user explicitly approves the exact final text.
+
+**At `balanced` / `auto`:** draft it and carry it into the sub-stage 5 checkpoint — that checkpoint is where the exact text gets approved. Either way: **do not touch Jira yet.**
 
 ### Sub-stage 5 — Apply and write the report
+
+**At `balanced` / `auto`, this sub-stage opens with the phase's single checkpoint.** Show, in one view:
+
+1. **The chosen direction** and the alternatives set aside, each with its reason (from sub-stage 3).
+2. **The rewritten title + description**, side by side with the originals (from sub-stage 4).
+3. **A preview of `report.md`**, plus the open questions being handed to gather.
+4. **The external write about to fire:** *"Approving this updates the Jira ticket's title and description. Nothing else on Jira is touched."*
+
+```
+Approve all / revise the direction / revise the ticket text / revise the report / abandon
+```
+
+Wait for the answer. On a revision request, redraft the affected piece and re-show the whole view. On approve, run the three steps below. At `guided` the pieces were already approved individually — go straight to the steps.
 
 Three steps, in order:
 
@@ -108,13 +155,14 @@ Three steps, in order:
 
 **Second — sync the local workspace**: edit `issue.md`'s frontmatter `title:` and its `## Description` body to the refined version, so every later phase sees the refined ticket.
 
-**Third — write the report**: show the user a preview, ask whether anything from the conversation is missing, then write `.dev-assistant/issues/$ARGUMENTS/refinement/report.md`:
+**Third — write the report** (at `guided`, show a preview first and ask whether anything from the conversation is missing; at `balanced` / `auto` the preview was part of the checkpoint above — just write it), at `.dev-assistant/issues/$ARGUMENTS/refinement/report.md`:
 
 ```markdown
 ---
 issue: $ARGUMENTS
 phase: refinement
 status: complete
+autonomy: <guided | balanced | auto>
 jira_updated: true | false | skipped-experimental | manual-paste
 ---
 
@@ -147,6 +195,10 @@ Final title and description as approved (and applied to Jira, per the frontmatte
 ## Open questions for gathering
 
 What refine could not settle — the head start for /dev-gather's open-questions list.
+
+## Decided without review
+
+(`balanced` / `auto` only — omit the section at `guided`.) What you settled without a checkpoint: which direction won and on what evidence, which alternatives you dropped before the user saw them, anything in the report the user has not read line by line.
 ```
 
 Close by telling the user the natural next step is `/dev-gather $ARGUMENTS`, which will pick this report up as a source.

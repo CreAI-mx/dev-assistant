@@ -47,6 +47,20 @@ Experimental. Single-user. Local-only. No distribution planned yet.
 
 "Checking" is transversal — present at every stage, not its own stage.
 
+## Autonomy levels
+
+Every stop a phase makes is one of four kinds, and only two of them are safe to remove: **content** (only the user knows it), **approval** (approving a draft the assistant produced), **external** (something leaving the machine), **escalation** (a failure or ambiguity). At `guided` — the original behavior — a full issue costs around 75 stops, and roughly 45% of them are approvals.
+
+The `autonomy` field in `issue.md` moves the approvals and batches the external confirmations:
+
+- **`guided`** — every checkpoint, every external operation confirmed on its own.
+- **`balanced`** (default) — one approval checkpoint per phase; each phase's external operations confirmed as one batch. ~20 stops.
+- **`auto`** — no approval checkpoints; what would have been approved is decided and recorded in the phase report's `## Decided without review` section. External batches remain. ~12 stops.
+
+Content questions, external writes, and escalations are floors: no level removes them, and `auto` never publishes unattended. `/dev-review` does not vary by level — its selection gate is the point of the command.
+
+The complete stop-by-stop inventory lives in [docs/interaction-map.md](docs/interaction-map.md).
+
 ## Three Zones of Storage
 
 ### Zone 1 — Program (global)
@@ -156,9 +170,9 @@ The CLI is the deterministic substrate. It does not implement phases (those are 
 ### Implemented
 
 - `dev-assistant init [--with-context <path>]...` — scaffold `.dev-assistant/` in cwd; add it to target repo's `.git/info/exclude`. The optional repeatable `--with-context` flag seeds `.dev-assistant/repo-context.md` with pointers to existing rules documents (paths are validated against the repo at init time; missing paths are warned and skipped).
-- `dev-assistant issue create --id <id> --title <t> [--description <d>] [--force] [--experimental]` — scaffold one issue workspace. `--experimental` sets `experimental: true` in `issue.md` frontmatter; `/dev-execute` then skips all external operations (Jira, GitHub, push, PR, comments) for this issue's lifecycle.
-- `dev-assistant issue show --id <id>` — print the issue's metadata and which phase folders have content. Used by slash commands to load context.
-- `dev-assistant issue set-flag --id <id> --experimental/--no-experimental` — toggle the experimental flag on an existing issue's `issue.md` frontmatter. Inserts the field if absent, updates in place if present.
+- `dev-assistant issue create --id <id> --title <t> [--description <d>] [--force] [--experimental] [--autonomy <level>]` — scaffold one issue workspace. `--experimental` sets `experimental: true` in `issue.md` frontmatter; `/dev-execute` then skips all external operations (Jira, GitHub, push, PR, comments) for this issue's lifecycle. `--autonomy` (`guided` | `balanced` | `auto`, default `balanced`) sets how many checkpoints the phase commands fire — see *Autonomy levels* below.
+- `dev-assistant issue show --id <id>` — print the issue's metadata, the resolved autonomy level (an `## Autonomy` block — this is how every phase command receives the level), and which phase folders have content. Used by slash commands to load context.
+- `dev-assistant issue set-flag --id <id> [--experimental/--no-experimental] [--autonomy <level>]` — toggle the experimental flag or change the autonomy level on an existing issue's `issue.md` frontmatter. Inserts a field if absent, updates in place if present.
 - `dev-assistant issue archive --id <id> [--force]` — move an issue workspace from `issues/<id>/` to `archive/issues/<id>/`. Non-destructive (reversible by a manual `mv`). Updates `issue.md` frontmatter to `status: archived` with an `archived_at` timestamp. Refuses collisions unless `--force`. Used by `/dev-evaluate` sub-phase 5.4 at the user's option.
 - `dev-assistant review create --pr <n> [--url <u>] [--title <t>] [--force]` — scaffold one PR review workspace at `reviews/pr-<n>/` (reviewer-side counterpart of `issue create`). Round folders are created by `/dev-review`, not here.
 - `dev-assistant review show --pr <n>` — print the review's metadata (review.md) and per-round file progress. Called by `/dev-review` to load context at the start of a round.

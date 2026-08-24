@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import shutil
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +13,39 @@ import typer
 WORKSPACE_DIRNAME = ".dev-assistant"
 WORKSPACE_SUBFOLDERS = ("issues", "reviews", "strategies", "lessons")
 PHASE_SUBFOLDERS = ("refinement", "gathering", "plan", "execution", "evaluation")
+
+
+class Autonomy(str, Enum):
+    """How much user input the phase commands ask for on this issue.
+
+    Controls the *approval* checkpoints only. Content questions (things only
+    the user knows), the confirmation of external writes, and escalations
+    (conflicts, failed criteria) fire at every level — see
+    docs/interaction-map.md for the full map.
+    """
+
+    guided = "guided"
+    balanced = "balanced"
+    auto = "auto"
+
+
+AUTONOMY_DEFAULT = Autonomy.balanced
+
+AUTONOMY_SUMMARY = {
+    Autonomy.guided: (
+        "every checkpoint fires — each sub-stage approval, each external "
+        "operation confirmed on its own"
+    ),
+    Autonomy.balanced: (
+        "one approval checkpoint per phase, one batched confirmation for "
+        "each phase's external operations"
+    ),
+    Autonomy.auto: (
+        "no approval checkpoints — decisions are made and recorded in the "
+        "phase report; external operations are still confirmed as one batch "
+        "per phase"
+    ),
+}
 
 app = typer.Typer(
     name="dev-assistant",
@@ -209,6 +243,22 @@ def issue_create(
             ),
         ),
     ] = False,
+    autonomy: Annotated[
+        Autonomy,
+        typer.Option(
+            "--autonomy",
+            help=(
+                "How much input the phase commands ask for on this issue. "
+                "'guided' fires every checkpoint (the pre-0.6 behavior); "
+                "'balanced' (default) collapses each phase's approvals into "
+                "one checkpoint and each phase's external operations into one "
+                "batched confirmation; 'auto' drops the approval checkpoints "
+                "entirely and records the decisions in the phase report. "
+                "External writes are confirmed at every level. Change it later "
+                "with `issue set-flag --autonomy`."
+            ),
+        ),
+    ] = AUTONOMY_DEFAULT,
 ) -> None:
     """Create a new issue workspace with phase subfolders and metadata."""
     root = _workspace_root()
@@ -243,6 +293,7 @@ def issue_create(
         f"created: {created_at}\n"
         "status: active\n"
         f"experimental: {'true' if experimental else 'false'}\n"
+        f"autonomy: {autonomy.value}\n"
         "---\n"
         "\n"
         "## Description\n"
@@ -252,6 +303,7 @@ def issue_create(
     (issue_dir / "issue.md").write_text(issue_md)
 
     _ok(f"Created issue '{issue_id}' at {issue_dir}")
+    typer.echo(f"  autonomy: {autonomy.value} — {AUTONOMY_SUMMARY[autonomy]}")
     if experimental:
         typer.echo("  (experimental: external operations will be skipped during /dev-execute)")
 
@@ -274,16 +326,29 @@ def issue_set_flag(
             ),
         ),
     ] = None,
+    autonomy: Annotated[
+        Autonomy | None,
+        typer.Option(
+            "--autonomy",
+            help=(
+                "Set how much input the phase commands ask for on this issue: "
+                "'guided' (every checkpoint), 'balanced' (one approval + one "
+                "external batch per phase), or 'auto' (no approval checkpoints; "
+                "external writes still confirmed as one batch per phase). Takes "
+                "effect on the next phase invocation."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Toggle flags on an existing issue's frontmatter.
 
-    Currently supports `--experimental` / `--no-experimental`. Edits the
-    issue.md file in place — inserts the field if absent, updates it if
-    present.
+    Supports `--experimental` / `--no-experimental` and `--autonomy`. Edits the
+    issue.md file in place — inserts a field if absent, updates it if present.
     """
-    if experimental is None:
+    if experimental is None and autonomy is None:
         _err(
-            "No flag specified. Use --experimental or --no-experimental."
+            "No flag specified. Use --experimental / --no-experimental "
+            "or --autonomy."
         )
         raise typer.Exit(code=1)
 
@@ -310,36 +375,50 @@ def issue_set_flag(
         _err(f"issue.md at {issue_md} does not start with frontmatter (---).")
         raise typer.Exit(code=1)
 
-    closing_index = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            closing_index = i
-            break
-    if closing_index is None:
+    if not any(line.strip() == "---" for line in lines[1:]):
         _err(f"issue.md at {issue_md} has no closing frontmatter delimiter.")
         raise typer.Exit(code=1)
 
-    new_value = "true" if experimental else "false"
-    found_index = None
-    for i in range(1, closing_index):
-        if lines[i].strip().startswith("experimental:"):
-            found_index = i
-            break
-
-    if found_index is not None:
-        lines[found_index] = f"experimental: {new_value}"
-    else:
-        lines.insert(closing_index, f"experimental: {new_value}")
+    if experimental is not None:
+        lines = _set_frontmatter_field(
+            lines, "experimental", "true" if experimental else "false"
+        )
+    if autonomy is not None:
+        lines = _set_frontmatter_field(lines, "autonomy", autonomy.value)
 
     issue_md.write_text("\n".join(lines) + "\n")
 
-    _ok(f"Set experimental={new_value} on issue '{issue_id}'.")
-    if experimental:
-        typer.echo("  /dev-execute will skip all external operations for this issue.")
-    else:
-        typer.echo(
-            "  /dev-execute will perform external operations normally (with per-op confirmations)."
-        )
+    if experimental is not None:
+        _ok(f"Set experimental={'true' if experimental else 'false'} on issue '{issue_id}'.")
+        if experimental:
+            typer.echo("  /dev-execute will skip all external operations for this issue.")
+        else:
+            typer.echo(
+                "  /dev-execute will perform external operations normally "
+                "(with per-op confirmations)."
+            )
+    if autonomy is not None:
+        _ok(f"Set autonomy={autonomy.value} on issue '{issue_id}'.")
+        typer.echo(f"  {AUTONOMY_SUMMARY[autonomy]}.")
+
+
+def _set_frontmatter_field(lines: list[str], key: str, value: str) -> list[str]:
+    """Set `key: value` inside the leading `---` frontmatter block.
+
+    Updates the field in place when present, inserts it just before the closing
+    delimiter when absent. Callers are responsible for having validated that the
+    frontmatter block is well-formed.
+    """
+    lines = list(lines)
+    closing_index = next(
+        i for i in range(1, len(lines)) if lines[i].strip() == "---"
+    )
+    for i in range(1, closing_index):
+        if lines[i].strip().startswith(f"{key}:"):
+            lines[i] = f"{key}: {value}"
+            return lines
+    lines.insert(closing_index, f"{key}: {value}")
+    return lines
 
 
 @issue_app.command("archive")
@@ -423,6 +502,28 @@ def issue_archive(
     typer.echo("  (workspace moved; lessons in .dev-assistant/lessons/ are unaffected)")
 
 
+def _resolve_autonomy(issue_md_text: str) -> tuple[Autonomy, str]:
+    """Resolve the issue's autonomy level from its issue.md frontmatter.
+
+    Issues created before the field existed resolve to `guided` — the behavior
+    they were planned under — rather than to the current creation default.
+    """
+    for line in issue_md_text.splitlines():
+        stripped = line.strip()
+        if stripped == "---":
+            continue
+        if stripped.startswith("autonomy:"):
+            raw = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            try:
+                return Autonomy(raw), "from issue.md"
+            except ValueError:
+                return (
+                    Autonomy.guided,
+                    f"issue.md has an unrecognized value '{raw}' — falling back",
+                )
+    return Autonomy.guided, "field absent (pre-0.6 issue) — defaulting"
+
+
 @issue_app.command("show")
 def issue_show(
     issue_id: Annotated[
@@ -454,7 +555,20 @@ def issue_show(
         contents = issue_md.read_text()
         typer.echo(contents.rstrip("\n"))
     else:
+        contents = ""
         typer.echo(f"(no issue.md at {issue_md})")
+
+    level, source = _resolve_autonomy(contents)
+    typer.echo()
+    typer.echo("## Autonomy")
+    typer.echo()
+    typer.echo(f"- level: **{level.value}** ({source})")
+    typer.echo(f"- meaning: {AUTONOMY_SUMMARY[level]}")
+    typer.echo(
+        "- unaffected at every level: content questions only the user can "
+        "answer, confirmation of external writes, and escalations "
+        "(conflicts, failing criteria, readiness blocks)"
+    )
 
     typer.echo()
     typer.echo("## Phase progress")
@@ -1054,7 +1168,7 @@ def tui(
             "pip install 'dev-assistant[tui]'"
         )
         _err(f"(import error: {exc})")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

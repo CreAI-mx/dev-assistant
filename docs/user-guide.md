@@ -214,9 +214,36 @@ Also decided at plan time (`branching_mode`):
 - **`single-branch`** (default) — all subtasks land as commits on one branch, one PR.
 - **`sub-branches`** — each subtask gets its own `-sub-N` branch and sub-PR targeting the parent feature branch, merged sequentially; the parent PR to `develop` collects them. Recommended when the commit estimate pushes past 8–10 or subtasks are independently reviewable.
 
+### Autonomy: how much the phases ask you
+
+Set once, at issue creation, and changeable any time:
+
+```
+dev-assistant issue create --id PROJ-123 --title "..." --autonomy balanced
+dev-assistant issue set-flag --id PROJ-123 --autonomy auto
+```
+
+| Level | What it does | A full issue costs about |
+|---|---|---|
+| `guided` | Every checkpoint fires: each sub-stage approval, each external operation confirmed on its own. | ~75 stops |
+| `balanced` **(default)** | One approval checkpoint per phase, and each phase's external operations confirmed as one batch. | ~20 stops |
+| `auto` | No approval checkpoints — decisions are made and recorded in the phase report. External operations are still confirmed as one batch per phase. | ~12 stops |
+
+Three things never change with the level:
+
+- **Questions only you can answer.** Refine's exploration conversation and gather's direct-input questions run at every level — `auto` asks them as one block instead of one at a time, but it asks. A phase that invents your constraints produces objectives grounded in nothing.
+- **External writes.** Nothing is pushed, opened, posted, transitioned, or merged without you saying yes. `auto` means fewer prompts, not unattended publishing. The merge confirmation in particular is asked once per PR at every level.
+- **Escalations.** Rebase conflicts, failing passing criteria, a readiness ✗, a reply that fails to post — these stop and ask regardless.
+
+Below `guided`, each phase's report gains a **`## Decided without review`** section listing what the assistant settled alone. That audit trail is what makes the lower levels safe: you can read back what you didn't watch.
+
+A single phase can be walked at a different level with a trailing token — `/dev-plan PROJ-123 --guided` — without changing the issue's setting. Issues created before the field existed run as `guided`.
+
+The full map of every stop, per phase, is in [interaction-map.md](interaction-map.md).
+
 ### The confirmation principle and batch reviews
 
-Worth restating because it's the safety model: **local = free, external = confirmed, external text = reviewed in one batch**. If you decline an external step, the phase records where it stopped and the next invocation resumes there — declining is never destructive.
+Worth restating because it's the safety model: **local = free, external = confirmed, external text = reviewed in one batch**. If you decline an external step, the phase records where it stopped and the next invocation resumes there — declining is never destructive. The autonomy level changes how many times you are asked; it never changes whether you are asked.
 
 ## 7. The workspace on disk
 
@@ -228,7 +255,7 @@ Everything lives under `.dev-assistant/` in the target repo (excluded from git):
 ├── strategies/                  # per-repo strategy overrides (only the customized ones)
 ├── issues/
 │   └── PROJ-123/
-│       ├── issue.md             # id, title, status, experimental flag
+│       ├── issue.md             # id, title, status, experimental flag, autonomy level
 │       ├── refinement/report.md
 │       ├── gathering/{report,objectives}.md
 │       ├── plan/{plan,report}.md
@@ -258,9 +285,9 @@ The CLI is the deterministic layer under the slash commands; you'll mostly use i
 |---|---|
 | `dev-assistant init [--with-context <files…>]` | Scaffold `.dev-assistant/` in the current repo |
 | `dev-assistant commands install` | Symlink the `/dev-*` slash commands into `.claude/commands/` |
-| `dev-assistant issue create --id <ID> --title <T> [--experimental]` | Create an issue workspace |
+| `dev-assistant issue create --id <ID> --title <T> [--experimental] [--autonomy guided\|balanced\|auto]` | Create an issue workspace |
 | `dev-assistant issue show --id <ID>` | Phase-by-phase progress of one issue |
-| `dev-assistant issue set-flag --id <ID> --experimental/--no-experimental` | Toggle experimental mode |
+| `dev-assistant issue set-flag --id <ID> --experimental/--no-experimental [--autonomy <level>]` | Toggle experimental mode / change the autonomy level |
 | `dev-assistant issue archive --id <ID>` | Move a finished workspace to `archive/` (reversible) |
 | `dev-assistant strategies show\|customize <name>` | Inspect / override a strategy for this repo |
 | `dev-assistant repo-context show` | Print the repo rules docs in effect |

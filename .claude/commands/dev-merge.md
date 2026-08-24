@@ -11,7 +11,7 @@ This phase is the explicit close of the feedback loop: reviews are done, the PR 
 
 ## Argument parsing
 
-`$ARGUMENTS` is the issue ID. Take the first whitespace-separated token. No other arguments in v1. Sub-PRs (`sub-branches` mode) are **not** merged here — the user merges those on GitHub between subtasks per `/dev-execute` 3.8; this phase merges the parent PR only.
+`$ARGUMENTS` is the issue ID. Take the first whitespace-separated token. The only other accepted token is a trailing `--guided` / `--balanced` / `--auto`, which overrides the issue's autonomy level for this invocation. Sub-PRs (`sub-branches` mode) are **not** merged here — the user merges those on GitHub between subtasks per `/dev-execute` 3.8; this phase merges the parent PR only.
 
 ## Current state of the issue
 
@@ -44,13 +44,26 @@ If a repo-context rule conflicts with a strategy (e.g. the repo mandates squash 
 
 ## Confirmation principle (non-negotiable)
 
-**Anything that touches the outside world requires explicit user confirmation, regardless of auto / auto-accept-edits modes.** For this phase that includes:
+**Nothing touches the outside world without explicit user confirmation.** This holds at every autonomy level and under Claude Code's auto-accept-edits mode. For this phase that includes:
 
 - Merging a PR (`gh pr merge`) — the least reversible operation in the whole lifecycle
 - Deleting the remote branch
 - Posting Jira comments
 
 Local operations (report writing, local branch cleanup on your own clone) do not require confirmation.
+
+## Autonomy level — how many checkpoints this phase fires
+
+The `## Autonomy` block in the `dev-assistant issue show` output above resolves this issue's level (`guided` | `balanced` | `auto`). Issues created before the field existed resolve to `guided`.
+
+| Kind of stop | `guided` | `balanced` | `auto` |
+|---|---|---|---|
+| **External** — merge, branch deletion, Jira comment | one confirmation each | **one confirmation per PR merged**, covering the merge commit, the branch deletion, and the Jira comment | same |
+| **Escalation** — any ✗ on the readiness checklist, a rejected merge, a missing hotfix sync PR | stops | stops | stops |
+
+**This phase has no approval-only stops, so `auto` and `balanced` behave identically here.** The merge confirmation is the hardest floor in the whole system: it is the least reversible operation dev-assistant performs, and no autonomy level fires it unattended. A hotfix merges two PRs and therefore asks twice — one confirmation per irreversible act.
+
+The readiness checklist in sub-phase 1 is also never waived. `auto` does not mean "merge anyway"; an override is something the user says, per item, and it is recorded in the report.
 
 ## Pre-flight (stop early on failure)
 
@@ -89,7 +102,7 @@ Merge readiness — <pr_url> (→ <target_branch>)
   [✗] Round 03 has 1 deferred discussion cluster → <slug>
 ```
 
-**Any ✗ → stop by default.** Show what's blocking and how to clear it (`/dev-feedback` for open threads/deferred clusters; push for sync; fix base). The user may explicitly override per item (*"merge anyway"*) — record any overrides in the report. **Pause and wait even under auto mode.**
+**Any ✗ → stop by default.** Show what's blocking and how to clear it (`/dev-feedback` for open threads/deferred clusters; push for sync; fix base). The user may explicitly override per item (*"merge anyway"*) — record any overrides in the report. **Pause and wait at every autonomy level; Claude Code's auto-accept mode does not answer this either.**
 
 ## Sub-phase 2 — Build the merge-commit message
 
@@ -109,13 +122,30 @@ refs <TICKET>
 PR: <pr_url>
 ```
 
-Display subject + body. **Ask: "Merge `<pr_url>` into `<target_branch>` with this merge commit? Proceed?"** Iterate on the message if the user edits it.
+Display subject + body.
+
+**At `guided`, ask:** *"Merge `<pr_url>` into `<target_branch>` with this merge commit? Proceed?"* — then confirm the branch deletion and the Jira comment separately in sub-phases 3 and 4.
+
+**At `balanced` / `auto`, ask once for the whole close-out:**
+
+```
+MERGE <pr_url> → <target_branch>
+
+  Merge commit:  [<TICKET>] <subject> (#<n>)
+                 <body>
+  Then:          delete origin/<branch_name>        (hotfix: deferred until PR 2 merges)
+                 comment on Jira <TICKET>: "Merged into <target>: <sha>"
+
+Approve / edit the merge message / merge but keep the branch / merge without the Jira comment / abandon
+```
+
+Iterate on the message if the user edits it. Approval covers the merge, the branch deletion, and the Jira comment — nothing else. If the merge itself is rejected by GitHub, stop there: the rest of the list does not fire.
 
 ## Sub-phase 3 — Merge and clean up (CONFIRM each external op)
 
 1. **Merge:** `gh pr merge <pr_url> --merge --subject "<subject>" --body "<body>"`. If GitHub rejects (branch protection, new push since check), surface verbatim and stop — never retry with a different merge method silently.
 2. **Verify the merge landed:** `gh pr view <pr_url> --json merged,mergeCommit` — record the merge commit SHA. Don't trust the exit code alone.
-3. **Delete the remote branch (CONFIRM):** *"Delete `origin/<branch_name>`? (Strategy: branches are deleted after merge.)"* — `gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/<branch_name>` (or `--delete-branch` on the merge call if the user pre-approves both together). **Hotfix flow: do NOT delete until the second PR is also merged** — it shares the branch.
+3. **Delete the remote branch (CONFIRM at `guided`; covered by the sub-phase 2 approval at `balanced` / `auto`):** *"Delete `origin/<branch_name>`? (Strategy: branches are deleted after merge.)"* — `gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/<branch_name>` (or `--delete-branch` on the merge call if the user pre-approves both together). **Hotfix flow: do NOT delete until the second PR is also merged** — it shares the branch.
 4. **Local cleanup (no confirm):** `git checkout <target_branch>`, `git pull origin <target_branch>`, `git branch -d <branch_name>`. If `-d` refuses (unmerged locally — normal after a remote merge commit), verify the PR merge SHA is in the pulled target branch, then `git branch -D` is acceptable; say so.
 
 **Hotfix flow — second PR:** repeat sub-phases 1–3 for `develop_pr_url` (→ `develop`). Subject gets the sync marker: `[<TICKET>] <summary> (sync to develop) (#<N>)`. Only after both are merged: delete the branch.
@@ -123,7 +153,7 @@ Display subject + body. **Ask: "Merge `<pr_url>` into `<target_branch>` with thi
 ## Sub-phase 4 — Record and hand off
 
 1. **Update `plan.md` frontmatter:** `pr_state: merged`, `merge_commit: <sha>`, `merged_at: <ISO>` (hotfix flow: also `develop_merge_commit`, `develop_merged_at`).
-2. **Jira comment (optional, CONFIRM, Atlassian MCP only):** per `comment-style`, e.g. `"Merged into <target_branch>: <merge commit sha> (<pr_url>)."` — one comment on the parent ticket. Status transitions stay in `/dev-evaluate`; this phase only records the merge.
+2. **Jira comment (optional, Atlassian MCP only; CONFIRM at `guided`, covered by the sub-phase 2 approval at `balanced` / `auto`):** per `comment-style`, e.g. `"Merged into <target_branch>: <merge commit sha> (<pr_url>)."` — one comment on the parent ticket. Status transitions stay in `/dev-evaluate`; this phase only records the merge.
 3. **Write `merge/report.md`** (`mkdir -p .dev-assistant/issues/<issue-id>/merge/`):
 
 ```markdown
@@ -131,6 +161,7 @@ Display subject + body. **Ask: "Merge `<pr_url>` into `<target_branch>` with thi
 issue: <issue-id>
 phase: merge
 status: complete
+autonomy: <guided | balanced | auto>
 pr_url: <url>
 target_branch: <target_branch>
 merge_commit: <sha>

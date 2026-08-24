@@ -11,7 +11,7 @@ This is the final phase. It produces the retrospective, archives lessons, and cl
 
 ## Argument parsing
 
-`$ARGUMENTS` is the issue ID. Take the first whitespace-separated token. No other arguments are supported in v1.
+`$ARGUMENTS` is the issue ID. Take the first whitespace-separated token. The only other accepted token is a trailing `--guided` / `--balanced` / `--auto`, which overrides the issue's autonomy level for this invocation.
 
 ## Current state of the issue
 
@@ -63,7 +63,7 @@ The above is the target repo's own guideline documents. Reference them in the re
 
 ## Confirmation principle (non-negotiable)
 
-**Anything that touches the outside world requires explicit user confirmation, regardless of auto / auto-accept-edits modes.** For this phase that includes:
+**Nothing touches the outside world without explicit user confirmation.** This holds at every autonomy level and under Claude Code's auto-accept-edits mode. For this phase that includes:
 
 - Posting the GitHub issue closure comment
 - Transitioning Jira parent or subtasks (any status change)
@@ -72,7 +72,23 @@ The above is the target repo's own guideline documents. Reference them in the re
 
 Local operations (writing retro / lessons / archive files) do not require confirmation — they are reversible and contained.
 
-**Batch-review rule (from user feedback, applies broadly):** All external-facing text + all proposed status changes are assembled into a **single batch view** before any of them fire. The user approves, edits per item, or skips per item. Reference: [[feedback-dev-feedback-batch-reply-review]] — same principle.
+**Batch-review rule (from user feedback, applies broadly):** All external-facing text + all proposed status changes are assembled into a **single batch view** before any of them fire. The user approves, edits per item, or skips per item. Reference: [[feedback-dev-feedback-batch-reply-review]] — same principle. **This rule holds at every autonomy level, `auto` included.**
+
+## Autonomy level — how many checkpoints this phase fires
+
+The `## Autonomy` block in the `dev-assistant issue show` output above resolves this issue's level (`guided` | `balanced` | `auto`). Issues created before the field existed resolve to `guided`.
+
+| Kind of stop | `guided` | `balanced` | `auto` |
+|---|---|---|---|
+| **Approval** — the retro + lessons (3.3), the archive offer (5.4) | both | folded into the sub-phase 4 batch; archiving becomes the default | none — retro and lessons are written and reported |
+| **External** — GH comment, Jira transitions, GH issue close | one batch (4.5), already | **the same batch, now carrying the retro summary** | the same batch |
+| **Escalation** — remote state contradicting the local artifacts, an external op that fails mid-batch | stops | stops | stops |
+
+So evaluate costs three stops at `guided` and **one** at `balanced` / `auto` — the external batch, which no level removes.
+
+**Never removed at any level in this phase:** the sub-phase 4 external batch. It closes tickets and transitions other people's board — the most visible thing dev-assistant does.
+
+At `balanced` / `auto`, add `autonomy: <level>` to the frontmatter of `retro.md`, `lessons.md`, and `report.md`, and a **`## Decided without review`** section to the retro listing which lessons were distilled without the user weighing in.
 
 ## How to interact with the user
 
@@ -146,6 +162,7 @@ Don't write this out yet — hold it for sub-phase 3.
 issue: <issue-id>
 phase: evaluation
 status: draft
+autonomy: <guided | balanced | auto>
 pr_url: <url or null>
 pr_state: <merged | closed-unmerged | open | n/a>
 total_subtasks: <n>
@@ -198,6 +215,10 @@ Things you didn't expect at gather time that emerged later.
 
 Non-obvious calls made during the issue that future-you might want to remember.
 
+## Decided without review
+
+(`balanced` / `auto` only — omit the section at `guided`.) Which lessons were distilled without the user weighing in, which outcome judgments ("partial" vs "landed") were yours, and — at `auto` — the fact that the retro itself was never reviewed before the external batch fired.
+
 ## Suggested follow-ups
 
 Things identified during this issue that should become future tickets. Format:
@@ -214,6 +235,7 @@ These are surfaced in the GH closure comment so they don't get lost.
 issue: <issue-id>
 phase: evaluation
 status: draft
+autonomy: <guided | balanced | auto>
 total_lessons: <n>
 ---
 
@@ -233,7 +255,11 @@ total_lessons: <n>
 
 ### 3.3 — Show to user, get decision
 
-Display a structured summary:
+**At `balanced`:** don't stop here. Set `status: drafted` in both frontmatters and carry the structured summary below into the sub-phase 4 batch, where the retro, the lessons, and the external operations are approved in one view.
+
+**At `auto`:** write both files as approved (`approved_by: autonomy-auto`), print the summary as a statement, and go to sub-phase 4. A lesson the user disagrees with is cheap to fix afterwards — the files stay editable and the repo-wide archive is regenerated on the next run.
+
+**At `guided`:** display a structured summary:
 
 ```
 Retro drafted for <issue-id> (PR state: <state>).
@@ -258,7 +284,7 @@ Files:
 Approve / edit retro / edit lessons / abandon?
 ```
 
-Wait for the user's decision. **Pause and wait even under auto mode.**
+Wait for the user's decision. **Pause and wait — Claude Code's auto-accept mode does not answer this.**
 
 - **Approve** → set `status: approved` in both frontmatters, proceed to sub-phase 4.
 - **Edit retro / lessons** → re-open the file, let user edit, re-show summary.
@@ -351,7 +377,19 @@ If Atlassian MCP is **not** available in this session: skip all Jira ops with a 
 
 ### 4.5 — Batch-review the full external set
 
-Assemble everything that's about to fire into one consolidated view:
+Assemble everything that's about to fire into one consolidated view.
+
+**At `balanced` / `auto`, the batch opens with the retro block** — the phase's whole output, above the operations it produced:
+
+```
+RETRO — <issue-id>   (files: evaluation/retro.md, evaluation/lessons.md)
+  Outcomes:  <general objective>: <landed/partial/no> · <X>/<Y> specific · <N> deferred
+  Drift:     <one line>
+  Lessons:   01 (process) <title> · 02 (technical) <title> · 03 (collaboration) <title>
+  Decided without review: <one line>
+```
+
+At `balanced`, "edit the retro" and "edit the lessons" are valid answers to the batch prompt below, alongside editing any operation. At `auto` the block is informational — the operations are what needs approving.
 
 ```
 ================================================================
@@ -394,7 +432,7 @@ Options:
   (d) Abandon all external ops (retro + lessons stay local)
 ```
 
-**Wait for user decision. Pause even under auto mode.**
+**Wait for the user's decision at every autonomy level. Claude Code's auto-accept mode does not answer this, and neither does `--auto`.**
 
 - **Approve** → proceed to 4.6.
 - **Edit / skip** → apply changes, re-show the batch.
@@ -513,6 +551,7 @@ Write `evaluation/report.md`:
 issue: <issue-id>
 phase: evaluation
 status: complete | partial
+autonomy: <guided | balanced | auto>
 completed_at: <ISO timestamp>
 pr_state_at_evaluation: <state>
 remote_state_verified: <true | discrepancies listed in retro.md>
@@ -550,7 +589,9 @@ Lifted from `retro.md`. User to file manually.
 
 ### 5.4 — Workspace archive offer
 
-Ask the user:
+**At `balanced` / `auto`: archive by default.** Run `dev-assistant issue archive --id <issue-id>`, report the new path, and note in the final report that the workspace was archived automatically and a directory move undoes it. Skip the archive (and say why) when the PR is still open or the batch deferred transitions to a later run — there is more work coming for this issue.
+
+**At `guided`,** ask the user:
 
 ```
 Evaluate complete. Workspace `.dev-assistant/issues/<issue-id>/` is under active issues.
